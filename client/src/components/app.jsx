@@ -1,76 +1,68 @@
+import "bootstrap/dist/css/bootstrap.min.css";
 import { useEffect, useState } from "react";
-import "../App.css";
+import {
+  Alert,
+  Badge,
+  Button,
+  ButtonGroup,
+  Card,
+  Col,
+  Container,
+  Row,
+  Spinner,
+} from "react-bootstrap";
 import TaskCreationForm from "./task_creation_form.jsx";
 import TaskEditForm from "./task_edit_form.jsx";
 
 function App() {
-  // Instead of serverMessage, let's use a more descriptive name
+  // State management remains the same - React Bootstrap doesn't change your logic
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(null);
 
-  // Function to handle when a new task is created
+  // All your existing functions remain exactly the same
   const handleTaskCreated = (newTask) => {
-    // Add the new task to the beginning of the tasks array
     setTasks((prevTasks) => [newTask, ...prevTasks]);
-
-    // Optionally scroll to show the new task
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Function to start editing a specific task
   const startEditing = (taskId) => {
     setEditingTaskId(taskId);
   };
 
-  // Function to handle when a task is updated
   const handleTaskUpdated = (updatedTask) => {
-    // Update the specific task in the tasks array
     setTasks((prevTasks) =>
       prevTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task))
     );
-
-    // Close the edit form
     setEditingTaskId(null);
-
-    // Show success feedback (optional)
     console.log("Task updated successfully:", updatedTask.title);
   };
 
-  // Function to handle canceling the edit operation
   const handleEditCancel = () => {
     setEditingTaskId(null);
   };
 
-  // Function to toggle task completion status (quick action)
   const toggleTaskCompletion = async (taskId) => {
-    // Find the current task
     const currentTask = tasks.find((task) => task.id === taskId);
-
     if (!currentTask) return;
 
-    // Optimistically update the UI
     setTasks((prevTasks) =>
       prevTasks.map((task) =>
         task.id === taskId ? { ...task, completed: !task.completed } : task
       )
     );
 
-    // In a real app, you'd make an API call here
     console.log(
       `Task ${taskId} completion toggled to ${!currentTask.completed}`
     );
   };
 
-  // Main delete function - this is where the magic happens
   const deleteTask = async (taskId) => {
     try {
-      // Show loading state for the specific task being deleted
       setDeleteLoading(taskId);
 
-      // Make the DELETE request to your backend
       const response = await fetch(
         `http://localhost:5000/api/tasks/${taskId}`,
         {
@@ -84,47 +76,34 @@ function App() {
       const data = await response.json();
 
       if (data.success) {
-        // Remove the deleted task from our local state immediately
-        // This gives users instant feedback without waiting for a refetch
         setTasks((currentTasks) =>
           currentTasks.filter((task) => task.id !== taskId)
         );
-
         console.log("Task deleted successfully:", data);
       } else {
         if (response.status === 404) {
-          console.log(
-            `🚀 ~ deleteTask ~ "Task not found - it may have already been deleted":`,
-            "Task not found - it may have already been deleted"
-          );
+          console.log("Task not found - it may have already been deleted");
         } else if (response.status === 409) {
           console.log(
-            `🚀 ~ deleteTask ~ "Cannot delete this task - it's referenced by other records":`,
             "Cannot delete this task - it's referenced by other records"
           );
         }
-
         console.error("Delete failed:", data);
       }
     } catch (err) {
-      // Handle network errors or other unexpected issues
       console.error("Error deleting task:", err);
     } finally {
-      // Always clear the loading state
       setDeleteLoading(null);
     }
   };
 
-  // Confirmation dialog before deletion - this prevents accidental deletions
   const handleDeleteClick = (task) => {
     const confirmMessage = `Are you sure you want to delete the task "${task.title}"?\nThis action cannot be undone.`;
-
     if (window.confirm(confirmMessage)) {
       deleteTask(task.id);
     }
   };
 
-  // Function to fetch all tasks from the API
   const fetchTasks = async () => {
     try {
       setLoading(true);
@@ -145,203 +124,194 @@ function App() {
       setLoading(false);
     }
   };
+
   useEffect(() => {
     fetchTasks();
-    // // Set loading to true when we start the request
-    // setLoading(true);
-
-    // fetch("http://localhost:5000/api/tasks")
-    //   .then((response) => {
-    //     // Check if the response is successful
-    //     if (!response.ok) {
-    //       throw new Error(`HTTP error! status: ${response.status}`);
-    //     }
-
-    //     return response.json();
-    //   })
-    //   .then((data) => {
-    //     // Set the tasks array from the response
-    //     setTasks(data.data || []); // Use empty array as fallback
-    //     setLoading(false);
-    //   })
-    //   .catch((error) => {
-    //     console.error("Error fetching tasks:", error);
-    //     setError(error.message);
-    //     setLoading(false);
-    //   });
   }, []);
 
-  // Separate completed and incomplete tasks for better organization
+  // Calculate task statistics for display
   const incompleteTasks = tasks.filter((task) => !task.completed);
   const completedTasks = tasks.filter((task) => task.completed);
 
-  // Handle different states of your data
+  // Loading state with Bootstrap spinner
   if (loading) {
-    return <div>Loading tasks...</div>;
+    return (
+      <Container
+        className="d-flex justify-content-center align-items-center"
+        style={{ minHeight: "200px" }}
+      >
+        <div className="text-center">
+          <Spinner animation="border" role="status" />
+          <div className="mt-2">Loading tasks...</div>
+        </div>
+      </Container>
+    );
   }
 
+  // Error state with Bootstrap alert
   if (error) {
-    return <div>Error loading tasks: {error}</div>;
+    return (
+      <Container className="mt-4">
+        <Alert variant="danger">
+          <Alert.Heading>Error Loading Tasks</Alert.Heading>
+          <p>{error}</p>
+        </Alert>
+      </Container>
+    );
   }
 
   return (
-    <div style={{ maxWidth: "800px", margin: "0 auto", padding: "20px" }}>
-      <h1 style={{ textAlign: "center", color: "#999", marginBottom: "30px" }}>
-        Task Manager App
-      </h1>
+    <Container className="py-4">
+      {/* Header with Bootstrap typography classes */}
+      <Row>
+        <Col>
+          <h1 className="text-center text-muted mb-4">Task Manager App</h1>
+        </Col>
+      </Row>
 
-      {/* Task creation form */}
-      <TaskCreationForm onTaskCreated={handleTaskCreated} />
+      {/* Task Creation Form */}
+      <Row className="mb-4">
+        <Col>
+          <TaskCreationForm onTaskCreated={handleTaskCreated} />
+        </Col>
+      </Row>
 
-      {/* Task edit form - only show when editing */}
+      {/* Task Edit Form - conditionally rendered */}
       {editingTaskId && (
-        <div style={{ marginBottom: "20px" }}>
-          <TaskEditForm
-            taskId={editingTaskId}
-            onTaskUpdated={handleTaskUpdated}
-            onCancel={handleEditCancel}
-          />
-        </div>
+        <Row className="mb-4">
+          <Col>
+            <TaskEditForm
+              taskId={editingTaskId}
+              onTaskUpdated={handleTaskUpdated}
+              onCancel={handleEditCancel}
+            />
+          </Col>
+        </Row>
       )}
 
-      {/* Task statistics */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginBottom: "20px",
-          padding: "15px",
-          backgroundColor: "#e9cc",
-          borderRadius: "8px",
-        }}
-      >
-        <div>
-          <strong>Total Tasks: {tasks.length}</strong>
-        </div>
-        <div>
-          <strong>Incomplete: {incompleteTasks.length}</strong>
-        </div>
-        <div>
-          <strong>Completed: {completedTasks.length}</strong>
-        </div>
-      </div>
+      {/* Task Statistics Card */}
+      <Row className="mb-4">
+        <Col>
+          <Card className="bg-light">
+            <Card.Body>
+              <Row className="text-center">
+                <Col md={4}>
+                  <Badge bg="primary" className="fs-6">
+                    Total Tasks: {tasks.length}
+                  </Badge>
+                </Col>
+                <Col md={4}>
+                  <Badge bg="warning" className="fs-6">
+                    Incomplete: {incompleteTasks.length}
+                  </Badge>
+                </Col>
+                <Col md={4}>
+                  <Badge bg="success" className="fs-6">
+                    Completed: {completedTasks.length}
+                  </Badge>
+                </Col>
+              </Row>
+            </Card.Body>
+          </Card>
+        </Col>
+      </Row>
 
-      {/* Check if we have tasks before trying to display them */}
-      <div>
-        {tasks.length === 0 ? (
-          <p>No tasks found. Create your first task!</p>
-        ) : (
-          <div>
-            {/* Map over the tasks array to create individual task elements */}
-            {tasks.map((task) => (
-              <div
-                key={task.id}
-                style={{
-                  border: "1px solid #ddd",
-                  borderRadius: "8px",
-                  padding: "15px",
-                  marginBottom: "15px",
-                  backgroundColor: task.completed ? "#f0f8f0" : "#ffffff",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "flex-start",
-                  }}
+      {/* Tasks Display */}
+      <Row>
+        <Col>
+          {tasks.length === 0 ? (
+            <Card className="text-center">
+              <Card.Body>
+                <Card.Text className="text-muted">
+                  No tasks found. Create your first task above!
+                </Card.Text>
+              </Card.Body>
+            </Card>
+          ) : (
+            <div>
+              {tasks.map((task) => (
+                <Card
+                  key={task.id}
+                  className={`mb-3 ${
+                    task.completed ? "bg-success-subtle" : ""
+                  }`}
                 >
-                  <div style={{ flex: 1 }}>
-                    <h3
-                      style={{
-                        margin: "0 0 8px 0",
-                        textDecoration: task.completed
-                          ? "line-through"
-                          : "none",
-                        color: task.completed ? "#666" : "#333",
-                      }}
-                    >
-                      {task.title}
-                    </h3>
-                    <p
-                      style={{
-                        margin: "0 0 8px 0",
-                        color: "#666",
-                        textDecoration: task.completed
-                          ? "line-through"
-                          : "none",
-                      }}
-                    >
-                      {task.description}
-                    </p>
-                    <div style={{ fontSize: "12px", color: "#888" }}>
-                      <span>
-                        Due: {new Date(task.due_date).toLocaleDateString()}
-                      </span>
-                      {task.completed && (
-                        <span style={{ marginLeft: "15px" }}>✓ Completed</span>
-                      )}
-                    </div>
-                  </div>
+                  <Card.Body>
+                    <Row className="align-items-start">
+                      {/* Task Content */}
+                      <Col md={8}>
+                        <Card.Title
+                          className={`mb-2 ${
+                            task.completed
+                              ? "text-decoration-line-through text-muted"
+                              : ""
+                          }`}
+                        >
+                          {task.title}
+                        </Card.Title>
+                        <Card.Text
+                          className={`mb-2 ${
+                            task.completed
+                              ? "text-decoration-line-through text-muted"
+                              : "text-secondary"
+                          }`}
+                        >
+                          {task.description}
+                        </Card.Text>
+                        <div className="small text-muted">
+                          <span>
+                            Due: {new Date(task.due_date).toLocaleDateString()}
+                          </span>
+                          {task.completed && (
+                            <Badge bg="success" className="ms-3">
+                              ✓ Completed
+                            </Badge>
+                          )}
+                        </div>
+                      </Col>
 
-                  <div
-                    style={{ display: "flex", gap: "8px", marginLeft: "15px" }}
-                  >
-                    <button
-                      onClick={() => toggleTaskCompletion(task.id)}
-                      style={{
-                        backgroundColor: task.completed ? "#ffc107" : "#28a745",
-                        color: "white",
-                        border: "none",
-                        padding: "6px 12px",
-                        borderRadius: "4px",
-                        cursor: "pointer",
-                        fontSize: "12px",
-                      }}
-                    >
-                      {task.completed ? "Mark Incomplete" : "Mark Complete"}
-                    </button>
+                      {/* Action Buttons */}
+                      <Col md={4} className="text-end">
+                        <ButtonGroup size="sm">
+                          <Button
+                            variant={task.completed ? "warning" : "success"}
+                            onClick={() => toggleTaskCompletion(task.id)}
+                          >
+                            {task.completed
+                              ? "Mark Incomplete"
+                              : "Mark Complete"}
+                          </Button>
 
-                    <button
-                      onClick={() => startEditing(task.id)}
-                      disabled={editingTaskId !== null}
-                      style={{
-                        backgroundColor:
-                          editingTaskId !== null ? "#ccc" : "#007bff",
-                        color: "white",
-                        border: "none",
-                        padding: "6px 12px",
-                        borderRadius: "4px",
-                        cursor:
-                          editingTaskId !== null ? "not-allowed" : "pointer",
-                        fontSize: "12px",
-                      }}
-                    >
-                      Edit
-                    </button>
+                          <Button
+                            variant="primary"
+                            onClick={() => startEditing(task.id)}
+                            disabled={editingTaskId !== null}
+                          >
+                            Edit
+                          </Button>
 
-                    <button
-                      onClick={() => handleDeleteClick(task)}
-                      disabled={deleteLoading === task.id}
-                      style={{
-                        color: "white",
-                        border: "none",
-                        padding: "6px 12px",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                        minWidth: "100px",
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+                          <Button
+                            variant="danger"
+                            onClick={() => handleDeleteClick(task)}
+                            disabled={deleteLoading === task.id}
+                          >
+                            {deleteLoading === task.id ? (
+                              <Spinner as="span" animation="border" size="sm" />
+                            ) : (
+                              "Delete"
+                            )}
+                          </Button>
+                        </ButtonGroup>
+                      </Col>
+                    </Row>
+                  </Card.Body>
+                </Card>
+              ))}
+            </div>
+          )}
+        </Col>
+      </Row>
+    </Container>
   );
 }
 
