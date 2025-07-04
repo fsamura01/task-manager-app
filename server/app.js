@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 
 // Test database connection on startup
-//db.testConnection();
+db.testConnection();
 
 // Your first real API endpoint - get all tasks
 app.get("/api/tasks", async (req, res) => {
