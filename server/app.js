@@ -1,3 +1,5 @@
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const express = require("express");
 const cors = require("cors");
 const db = require("./database");
@@ -5,6 +7,8 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || "your-fallback-secret-key";
+console.log(require("crypto").randomBytes(32).toString("base64")); // 'hex'
 
 // Middleware setup
 app.use(cors());
@@ -13,11 +17,226 @@ app.use(express.json());
 // Test database connection on startup
 db.testConnection();
 
+// Helper function to generate JWT tokens
+// Think of this like creating a secure ID badge with expiration date
+const generateToken = (userId, username) => {
+  return jwt.sign(
+    {
+      userId: userId,
+      username: username,
+    },
+    JWT_SECRET,
+    { expiresIn: "24h" } // Token expires in 24 hours for security
+  );
+};
+
+// REGISTRATION ENDPOINT
+// This is like the "sign up for a new account" process
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { username, email, password, name } = req.body;
+
+    // Step 1: Validate input data
+    // We check if all required fields are provided
+    if (!username || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "Username, email, and password are required",
+      });
+    }
+
+    // Use provided name or default to username
+    const displayName = name || username;
+
+    // Step 2: Validate password strength
+    // A weak password is like using a cardboard lock
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Password must be at least 6 characters long",
+      });
+    }
+
+    // Step 3: Check if user already exists
+    // Like checking if someone already has an account before creating a new one
+    const existingUser = await db.query(
+      "SELECT id FROM users WHERE username = $1 OR email = $2",
+      [username, email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "Username or email already exists",
+      });
+    }
+
+    // Step 4: Hash the password
+    // This is like turning the password into a secure fingerprint
+    const saltRounds = 12; // Higher number = more secure but slower
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Step 5: Create the new user in database
+    const newUser = await db.query(
+      "INSERT INTO users (username, email, password_hash, name) VALUES ($1, $2, $3, $4) RETURNING id, username, email, name",
+      [username, email, hashedPassword, displayName] // Using username as default name
+    );
+
+    // Step 6: Generate JWT token for immediate login
+    // Like giving them their key card right after registration
+    const token = generateToken(newUser.rows[0].id, newUser.rows[0].username);
+
+    // Step 7: Send success response (never send back the password!)
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      data: {
+        user: {
+          id: newUser.rows[0].id,
+          username: newUser.rows[0].username,
+          email: newUser.rows[0].email,
+          name: newUser.rows[0].name,
+        },
+        token: token,
+      },
+    });
+  } catch (error) {
+    console.error("Registration error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Registration failed",
+    });
+  }
+});
+
+// LOGIN ENDPOINT
+// This is like the "sign in to existing account" process
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Step 1: Validate input
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "Username and password are required",
+      });
+    }
+
+    // Step 2: Find user in database
+    // Like looking up someone's account information
+    const user = await db.query(
+      "SELECT id, username, email, password_hash, name FROM users WHERE username = $1",
+      [username]
+    );
+
+    if (user.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid username or password",
+      });
+    }
+
+    // Step 3: Verify password
+    // Like checking if their key creates the same fingerprint
+    const validPassword = await bcrypt.compare(
+      password,
+      user.rows[0].password_hash
+    );
+
+    if (!validPassword) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid username or password",
+      });
+    }
+
+    // Step 4: Generate JWT token
+    // Like giving them a fresh key card
+    const token = generateToken(user.rows[0].id, user.rows[0].username);
+
+    // Step 5: Send success response
+    res.json({
+      success: true,
+      message: "Login successful",
+      data: {
+        user: {
+          id: user.rows[0].id,
+          username: user.rows[0].username,
+          email: user.rows[0].email,
+          name: user.rows[0].name,
+        },
+        token: token,
+      },
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Login failed",
+    });
+  }
+});
+
+// MIDDLEWARE TO VERIFY JWT TOKENS
+// This is like the security guard that checks key cards
+const verifyToken = (req, res, next) => {
+  // Look for token in Authorization header
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(" ")[1]; // Expected format: "Bearer TOKEN"
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: "Access token required",
+    });
+  }
+
+  try {
+    // Verify the token is valid and not expired
+    const decoded = jwt.verify(token, JWT_SECRET);
+    console.log("🚀 ~ verifyToken ~ decoded:", decoded);
+
+    // Add user info to request object for use in other routes
+    req.user = decoded;
+    next(); // Continue to the next middleware/route
+  } catch (error) {
+    return res.status(403).json({
+      success: false,
+      error: "Invalid or expired token",
+    });
+  }
+};
+
+// PROTECTED ROUTE EXAMPLE
+// This shows how to use the middleware to protect routes
+app.get("/api/auth/profile", verifyToken, async (req, res) => {
+  try {
+    // req.user contains the decoded JWT data
+    const user = await db.query(
+      "SELECT id, username, email, name FROM users WHERE id = $1",
+      [req.user.userId]
+    );
+
+    res.json({
+      success: true,
+      data: user.rows[0],
+    });
+  } catch (error) {
+    console.error("Profile fetch error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch profile",
+    });
+  }
+});
+
 // Your first real API endpoint - get all tasks
-app.get("/api/tasks", async (req, res) => {
+app.get("/api/tasks", verifyToken, async (req, res) => {
   try {
     // Query the database for all tasks with user information
-    const result = await db.query(`
+    const result = await db.query(
+      `
             SELECT 
                 tasks.id,
                 tasks.title,
@@ -29,9 +248,12 @@ app.get("/api/tasks", async (req, res) => {
                 users.name as user_name,
                 users.email as user_email
             FROM tasks 
-            JOIN users ON tasks.user_id = users.id 
+            JOIN users ON tasks.user_id = users.id
+            WHERE tasks.user_id = $1 
             ORDER BY tasks.created_at DESC
-        `);
+        `,
+      [req.user.userId]
+    );
     // Send the results back as JSON
     res.json({
       success: true,
@@ -48,12 +270,12 @@ app.get("/api/tasks", async (req, res) => {
 });
 
 // Endpoint to create a new task
-app.post("/api/tasks", async (req, res) => {
+app.post("/api/tasks", verifyToken, async (req, res) => {
   try {
-    const { title, description, user_id, due_date } = req.body;
+    const { title, description, due_date } = req.body;
 
     // Validate required fields
-    if (!title || !user_id) {
+    if (!title || !req.user.userId) {
       return res.status(400).json({
         success: false,
         error: "Title and user_id are required",
@@ -67,7 +289,7 @@ app.post("/api/tasks", async (req, res) => {
             VALUES ($1, $2, $3, $4)
             RETURNING *
         `,
-      [title, description, user_id, due_date]
+      [title, description, req.user.userId, due_date]
     );
 
     res.status(201).json({
@@ -84,9 +306,10 @@ app.post("/api/tasks", async (req, res) => {
 });
 
 // Get a specific task by ID
-app.get("/api/tasks/:id", async (req, res) => {
+app.get("/api/tasks/:id", verifyToken, async (req, res) => {
   try {
     const taskId = req.params.id; // This captures the ID from the URL
+    const userId = req.user.userId;
 
     // Query the database for the specific task
     const result = await db.query(
@@ -103,9 +326,9 @@ app.get("/api/tasks/:id", async (req, res) => {
         users.email as user_email
       FROM tasks
       JOIN users ON tasks.user_id = users.id
-      WHERE tasks.id = $1
+      WHERE tasks.id = $1 AND tasks.user_id = $2
     `,
-      [taskId]
+      [taskId, userId]
     );
 
     // Check if task exists
@@ -132,10 +355,11 @@ app.get("/api/tasks/:id", async (req, res) => {
 });
 
 // PUT endpoint for updating tasks
-app.put("/api/tasks/:id", async (req, res) => {
+// Protected endpoint - update task for authenticated user
+app.put("/api/tasks/:id", verifyToken, async (req, res) => {
   try {
     const taskId = parseInt(req.params.id);
-    console.log("🚀 ~ app.put ~ req.params.id:", req.params.id);
+    const userId = req.user.userId;
     const { title, description, due_date, completed } = req.body;
 
     // Validate the task ID
@@ -146,79 +370,20 @@ app.put("/api/tasks/:id", async (req, res) => {
       });
     }
 
-    // First, check if the task exists and get current state
+    // First, check if the task exists and belongs to the authenticated user
     const existingTaskResult = await db.query(
-      "SELECT * FROM tasks WHERE id = $1",
-      [taskId]
+      "SELECT * FROM tasks WHERE id = $1 AND user_id = $2",
+      [taskId, userId]
     );
 
     if (existingTaskResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: "Task not found",
+        error: "Task not found or access denied",
       });
     }
 
     const existingTask = existingTaskResult.rows[0];
-
-    // Add this right before your UPDATE query
-    console.log("=== DETAILED TIMESTAMP ANALYSIS ===");
-    console.log("Existing timestamp (raw):", existingTask.updated_at);
-    console.log(
-      "Existing timestamp (ISO):",
-      existingTask.updated_at.toISOString()
-    );
-    console.log(
-      "Existing timestamp (getTime):",
-      existingTask.updated_at.getTime()
-    );
-
-    // Let's also check what happens when we convert back and forth
-    const timestampAsString = existingTask.updated_at.toISOString();
-    const timestampParsedBack = new Date(timestampAsString);
-    console.log("Parsed back timestamp:", timestampParsedBack.toISOString());
-    console.log(
-      "Are they equal?",
-      existingTask.updated_at.getTime() === timestampParsedBack.getTime()
-    );
-
-    // Add this debugging query to see what PostgreSQL actually has stored
-    const debugResult = await db.query(
-      "SELECT id, updated_at, EXTRACT(microseconds FROM updated_at) as microseconds FROM tasks WHERE id = $1",
-      [taskId]
-    );
-
-    console.log("=== DATABASE TIMESTAMP ANALYSIS ===");
-    console.log("Database timestamp:", debugResult.rows[0].updated_at);
-    console.log("Database microseconds:", debugResult.rows[0].microseconds);
-    console.log(
-      "JavaScript timestamp we are comparing:",
-      existingTask.updated_at
-    );
-
-    // Add this to see the exact precision difference
-    const precisionTestResult = await db.query(
-      `SELECT updated_at, 
-          EXTRACT(EPOCH FROM updated_at) as epoch_seconds,
-          EXTRACT(EPOCH FROM updated_at) * 1000000 as epoch_microseconds,
-          updated_at = $1 as exact_match
-   FROM tasks WHERE id = $2`,
-      [existingTask.updated_at, taskId]
-    );
-
-    console.log("=== PRECISION COMPARISON ===");
-    console.log("Exact match result:", precisionTestResult.rows[0].exact_match);
-    console.log(
-      "Database epoch microseconds:",
-      precisionTestResult.rows[0].epoch_microseconds
-    );
-    console.log(
-      "JavaScript getTime() * 1000:",
-      existingTask.updated_at.getTime() * 1000
-    );
-    console.log("Existing task updated_at:", existingTask.updated_at);
-    console.log("Trying to update with timestamp:", existingTask.updated_at);
-    console.log("Current time:", new Date().toISOString());
 
     // Server-side validation
     const validationErrors = [];
@@ -272,7 +437,7 @@ app.put("/api/tasks/:id", async (req, res) => {
     const sanitizedTitle = title.trim();
     const sanitizedDescription = description.trim();
 
-    // Check for meaningful changes (optional optimization)
+    // Check for meaningful changes
     const hasChanges =
       sanitizedTitle !== existingTask.title ||
       sanitizedDescription !== existingTask.description ||
@@ -280,7 +445,6 @@ app.put("/api/tasks/:id", async (req, res) => {
       completed !== existingTask.completed;
 
     if (!hasChanges) {
-      // No changes detected, return current task without database operation
       return res.status(200).json({
         success: true,
         message: "No changes detected",
@@ -288,53 +452,26 @@ app.put("/api/tasks/:id", async (req, res) => {
       });
     }
 
-    // Handle completion timestamp logic
-    let completedAt = existingTask.completed_at;
-
-    if (completed && !existingTask.completed) {
-      // Task is being marked as completed
-      completedAt = new Date().toISOString();
-    } else if (!completed && existingTask.completed) {
-      // Task is being marked as incomplete
-      completedAt = null;
-    }
-
-    // Perform the update with optimistic concurrency control
-    // This approach uses a reasonable tolerance window instead of exact equality
+    // Perform the update with user verification
     const updateResult = await db.query(
       `UPDATE tasks 
-   SET title = $1, description = $2, due_date = $3, completed = $4, updated_at = NOW()
-   WHERE id = $5 AND ABS(EXTRACT(EPOCH FROM (updated_at - $6))) < 1.0
-   RETURNING *`,
+       SET title = $1, description = $2, due_date = $3, completed = $4, updated_at = NOW()
+       WHERE id = $5 AND user_id = $6
+       RETURNING *`,
       [
         sanitizedTitle,
         sanitizedDescription,
         due_date,
         completed,
         taskId,
-        existingTask.updated_at,
+        userId,
       ]
     );
 
-    // Add some helpful logging to understand what's happening
     if (updateResult.rows.length === 0) {
-      // Let's see what the actual time difference was
-      const timeDiffResult = await db.query(
-        `SELECT EXTRACT(EPOCH FROM (updated_at - $1)) as time_difference_seconds
-     FROM tasks WHERE id = $2`,
-        [existingTask.updated_at, taskId]
-      );
-
-      console.log(
-        "Time difference in seconds:",
-        timeDiffResult.rows[0]?.time_difference_seconds
-      );
-
-      return res.status(409).json({
+      return res.status(404).json({
         success: false,
-        error: "Conflict detected",
-        message:
-          "This task has been modified by another user. Please refresh and try again.",
+        error: "Task not found or access denied",
       });
     }
 
@@ -353,17 +490,15 @@ app.put("/api/tasks/:id", async (req, res) => {
         users.email as user_email
       FROM tasks
       JOIN users ON tasks.user_id = users.id
-      WHERE tasks.id = $1
-    `,
-      [taskId]
+      WHERE tasks.id = $1 AND tasks.user_id = $2
+      `,
+      [taskId, userId]
     );
 
-    // Log the successful update
     console.log(
       `Task updated successfully: ID ${taskId}, Title: "${sanitizedTitle}"`
     );
 
-    // Return success response
     res.status(200).json({
       success: true,
       message: "Task updated successfully",
@@ -371,7 +506,6 @@ app.put("/api/tasks/:id", async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating task:", error);
-
     res.status(500).json({
       success: false,
       error: "Failed to update task",
@@ -381,10 +515,10 @@ app.put("/api/tasks/:id", async (req, res) => {
 });
 
 // DELETE endpoint for removing tasks
-app.delete("/api/tasks/:id", async (req, res) => {
+app.delete("/api/tasks/:id", verifyToken, async (req, res) => {
   try {
     const taskId = parseInt(req.params.id);
-
+    const userId = req.user.userId;
     // Validate the task ID - ensure it's a valid number
     if (!taskId || isNaN(taskId)) {
       return res.status(400).json({
@@ -396,8 +530,8 @@ app.delete("/api/tasks/:id", async (req, res) => {
     // First, check if the task exists before attempting deletion
     // This helps us provide better error messages to the user
     const existingTaskResult = await db.query(
-      "SELECT id, title FROM tasks WHERE id = $1",
-      [taskId]
+      "SELECT id, title FROM tasks WHERE id = $1 AND user_id = $2",
+      [taskId, userId]
     );
 
     if (existingTaskResult.rows.length === 0) {
@@ -415,8 +549,8 @@ app.delete("/api/tasks/:id", async (req, res) => {
     // Perform the actual deletion
     // Using RETURNING * helps us confirm the deletion was successful
     const deleteResult = await db.query(
-      "DELETE FROM tasks WHERE id = $1 RETURNING *",
-      [taskId]
+      "DELETE FROM tasks WHERE id = $1 AND user_id = $2 RETURNING *",
+      [taskId, userId]
     );
 
     // Double-check that the deletion actually happened
@@ -430,7 +564,7 @@ app.delete("/api/tasks/:id", async (req, res) => {
 
     // Log the successful deletion for monitoring purposes
     console.log(
-      `Task deleted successfully: ID ${taskId}, Title: "${taskToDelete.title}"`
+      `Task deleted successfully: ID ${taskId}, Title: "${deleteResult.title}"`
     );
 
     // Return success response with confirmation
@@ -468,3 +602,6 @@ app.delete("/api/tasks/:id", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+// Export the middleware so you can use it in other routes
+module.exports = { verifyToken };

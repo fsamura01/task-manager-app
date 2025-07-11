@@ -9,8 +9,10 @@ import {
   Row,
   Spinner,
 } from "react-bootstrap";
+import { useAuth } from "./authentication_provider_component";
 
 function TaskEditForm({ taskId, onTaskUpdated, onCancel }) {
+  const { token } = useAuth();
   // State management remains identical - React Bootstrap doesn't change your data flow
   const [formData, setFormData] = useState({
     title: "",
@@ -34,7 +36,13 @@ function TaskEditForm({ taskId, onTaskUpdated, onCancel }) {
         setFetchError(null);
 
         const response = await fetch(
-          `http://localhost:5000/api/tasks/${taskId}`
+          `http://localhost:5000/api/tasks/${taskId}`,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+          }
         );
 
         if (!response.ok) {
@@ -155,6 +163,7 @@ function TaskEditForm({ taskId, onTaskUpdated, onCancel }) {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify(formData),
         }
