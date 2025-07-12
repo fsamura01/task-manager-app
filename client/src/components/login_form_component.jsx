@@ -28,7 +28,9 @@ const LoginForm = ({ onSwitchToRegister }) => {
     console.log("🚀 ~ handleSubmit ~ result:", result);
 
     if (!result.success) {
-      setError(result.error);
+      setError(
+        typeof result.error === "string" ? result.error : result.error.message
+      );
     }
 
     setLoading(false);
