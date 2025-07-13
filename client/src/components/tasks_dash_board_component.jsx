@@ -18,7 +18,7 @@ import { useAuth } from "./authentication_provider_component.jsx";
 
 const API_BASE_URL = `http://localhost:5000/api`;
 // Main Dashboard Component
-const Dashboard = () => {
+const TasksDashboard = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -318,4 +318,4 @@ const Dashboard = () => {
   );
 };
 
-export default Dashboard;
+export default TasksDashboard;
