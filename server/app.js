@@ -621,6 +621,406 @@ app.delete("/api/tasks/:id", verifyToken, async (req, res) => {
     });
   }
 });
+
+// Add these new endpoints to your existing server.js file
+// These endpoints handle project management and the new project-task relationship
+
+// GET /api/projects - Fetch all projects for the authenticated user
+app.get("/api/projects", verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      `
+      SELECT 
+        p.id,
+        p.name,
+        p.description,
+        p.created_at,
+        p.updated_at,
+        COUNT(t.id) as task_count,
+        COUNT(CASE WHEN t.completed = true THEN 1 END) as completed_count
+      FROM projects p
+      LEFT JOIN tasks t ON p.id = t.project_id
+      WHERE p.user_id = $1
+      GROUP BY p.id, p.name, p.description, p.created_at, p.updated_at
+      ORDER BY p.created_at DESC
+      `,
+      [req.user.userId]
+    );
+
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+    });
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch projects",
+    });
+  }
+});
+
+// POST /api/projects - Create a new project
+app.post("/api/projects", verifyToken, async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    // Validate required fields
+    if (!name || name.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Project name is required and must be at least 3 characters long",
+      });
+    }
+
+    // Check if project name already exists for this user
+    const existingProject = await db.query(
+      "SELECT id FROM projects WHERE user_id = $1 AND LOWER(name) = LOWER($2)",
+      [req.user.userId, name.trim()]
+    );
+
+    if (existingProject.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "A project with this name already exists",
+      });
+    }
+
+    // Create the new project
+    const result = await db.query(
+      `
+      INSERT INTO projects (name, description, user_id)
+      VALUES ($1, $2, $3)
+      RETURNING *
+      `,
+      [name.trim(), description?.trim() || null, req.user.userId]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Project created successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error creating project:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to create project",
+    });
+  }
+});
+
+// GET /api/projects/:id - Get a specific project with its tasks
+app.get("/api/projects/:id", verifyToken, async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const userId = req.user.userId;
+
+    if (!projectId || isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid project ID",
+      });
+    }
+
+    // Get project details
+    const projectResult = await db.query(
+      `
+      SELECT 
+        p.id,
+        p.name,
+        p.description,
+        p.created_at,
+        p.updated_at,
+        u.name as name
+      FROM projects p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = $1 AND p.user_id = $2
+      `,
+      [projectId, userId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found",
+      });
+    }
+
+    // Get all tasks for this project
+    const tasksResult = await db.query(
+      `
+      SELECT 
+        t.id,
+        t.title,
+        t.description,
+        t.completed,
+        t.created_at,
+        t.updated_at,
+        t.due_date,
+        t.project_id
+      FROM tasks t
+      WHERE t.project_id = $1
+      ORDER BY t.created_at DESC
+      `,
+      [projectId]
+    );
+
+    // Combine project and tasks data
+    const projectWithTasks = {
+      ...projectResult.rows[0],
+      tasks: tasksResult.rows,
+      task_count: tasksResult.rows.length,
+      completed_count: tasksResult.rows.filter((task) => task.completed).length,
+    };
+
+    res.json({
+      success: true,
+      data: projectWithTasks,
+    });
+  } catch (error) {
+    console.error("Error fetching project:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch project",
+    });
+  }
+});
+
+// PUT /api/projects/:id - Update a project
+app.put("/api/projects/:id", verifyToken, async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const userId = req.user.userId;
+    const { name, description } = req.body;
+
+    if (!projectId || isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid project ID",
+      });
+    }
+
+    // Validate input
+    if (!name || name.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Project name is required and must be at least 3 characters long",
+      });
+    }
+
+    // Check if project exists and belongs to user
+    const existingProject = await db.query(
+      "SELECT * FROM projects WHERE id = $1 AND user_id = $2",
+      [projectId, userId]
+    );
+
+    if (existingProject.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found or access denied",
+      });
+    }
+
+    // Check for name conflicts (excluding current project)
+    const nameConflict = await db.query(
+      "SELECT id FROM projects WHERE user_id = $1 AND LOWER(name) = LOWER($2) AND id != $3",
+      [userId, name.trim(), projectId]
+    );
+
+    if (nameConflict.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "A project with this name already exists",
+      });
+    }
+
+    // Update the project
+    const result = await db.query(
+      `
+      UPDATE projects 
+      SET name = $1, description = $2, updated_at = NOW()
+      WHERE id = $3 AND user_id = $4
+      RETURNING *
+      `,
+      [name.trim(), description?.trim() || null, projectId, userId]
+    );
+
+    res.json({
+      success: true,
+      message: "Project updated successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error updating project:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to update project",
+    });
+  }
+});
+
+// DELETE /api/projects/:id - Delete a project and all its tasks
+app.delete("/api/projects/:id", verifyToken, async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const userId = req.user.userId;
+
+    if (!projectId || isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid project ID",
+      });
+    }
+
+    // Check if project exists and belongs to user
+    const existingProject = await db.query(
+      "SELECT name FROM projects WHERE id = $1 AND user_id = $2",
+      [projectId, userId]
+    );
+
+    if (existingProject.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found or access denied",
+      });
+    }
+
+    // Get task count for confirmation
+    const taskCount = await db.query(
+      "SELECT COUNT(*) as count FROM tasks WHERE project_id = $1",
+      [projectId]
+    );
+
+    // Delete the project (CASCADE will handle related tasks)
+    const deleteResult = await db.query(
+      "DELETE FROM projects WHERE id = $1 AND user_id = $2 RETURNING *",
+      [projectId, userId]
+    );
+
+    res.json({
+      success: true,
+      message: "Project and all associated tasks deleted successfully",
+      data: {
+        deletedProjectId: projectId,
+        deletedProjectName: existingProject.rows[0].name,
+        deletedTaskCount: parseInt(taskCount.rows[0].count),
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting project:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete project",
+    });
+  }
+});
+
+// MODIFIED: Update the existing tasks endpoint to work with projects
+// Replace your existing GET /api/tasks endpoint with this version
+app.get("/api/tasks", verifyToken, async (req, res) => {
+  try {
+    const { project_id } = req.query; // Allow filtering by project
+
+    let query = `
+      SELECT 
+        t.id,
+        t.title,
+        t.description,
+        t.completed,
+        t.created_at,
+        t.updated_at,
+        t.due_date,
+        t.project_id,
+        p.name as project_name,
+        u.name as user_name,
+        u.email as user_email
+      FROM tasks t
+      JOIN projects p ON t.project_id = p.id
+      JOIN users u ON t.user_id = u.id
+      WHERE t.user_id = $1
+    `;
+
+    let params = [req.user.userId];
+
+    // Add project filter if specified
+    if (project_id) {
+      query += ` AND t.project_id = $2`;
+      params.push(parseInt(project_id));
+    }
+
+    query += ` ORDER BY t.created_at DESC`;
+
+    const result = await db.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+    });
+  } catch (error) {
+    console.error("Error fetching tasks:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch tasks",
+    });
+  }
+});
+
+// MODIFIED: Update the existing task creation endpoint to require project_id
+// Replace your existing POST /api/tasks endpoint with this version
+app.post("/api/tasks", verifyToken, async (req, res) => {
+  try {
+    const { title, description, due_date, project_id } = req.body;
+
+    // Validate required fields
+    if (!title || !project_id) {
+      return res.status(400).json({
+        success: false,
+        error: "Title and project_id are required",
+      });
+    }
+
+    // Verify the project exists and belongs to the user
+    const projectCheck = await db.query(
+      "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+      [project_id, req.user.userId]
+    );
+
+    if (projectCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found or access denied",
+      });
+    }
+
+    // Create the new task
+    const result = await db.query(
+      `
+      INSERT INTO tasks (title, description, user_id, project_id, due_date)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+      `,
+      [title, description, req.user.userId, project_id, due_date]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Task created successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error creating task:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to create task",
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
