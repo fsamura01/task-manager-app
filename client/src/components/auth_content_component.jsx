@@ -18,9 +18,22 @@ const AuthContent = () => {
   return (
     <div>
       <AppNavbar />
-      <ProjectsDashboard />
-      {/* <TasksDashboard /> */}
+      {/* This is where we implement the nested routing structure */}
+      <Routes>
+        {/* Root route shows the projects dashboard */}
+        <Route path="/" element={<ProjectsDashboard />} />
+
+        {/* Projects route also shows the projects dashboard */}
+        <Route path="/projects" element={<ProjectsDashboard />} />
+
+        {/* Individual project route shows tasks scoped to that project */}
+        <Route path="/projects/:projectId/tasks" element={<TasksDashboard />} />
+
+        {/* Fallback route for any unmatched paths */}
+        <Route path="*" element={<ProjectsDashboard />} />
+      </Routes>
     </div>
   );
 };
+
 export default AuthContent;

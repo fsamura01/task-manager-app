@@ -3,7 +3,7 @@ import { Alert, Button, Card, Col, Form, Row, Spinner } from "react-bootstrap";
 import { useAuth } from "./authentication_provider_component";
 
 // Enhanced Task Creation Form Component with Smart Button States
-const TaskCreationForm = ({ onTaskCreated }) => {
+const TaskCreationForm = ({ onTaskCreated, projectId }) => {
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -89,7 +89,7 @@ const TaskCreationForm = ({ onTaskCreated }) => {
 
     // Validate form before submission
     if (!validateForm()) {
-      setError("Please fix the validation errors above");
+      setError("Please fix the validation errors below");
       return;
     }
 
@@ -105,6 +105,7 @@ const TaskCreationForm = ({ onTaskCreated }) => {
         body: JSON.stringify({
           ...formData,
           user_id: user.id,
+          project_id: projectId,
         }),
       });
 
