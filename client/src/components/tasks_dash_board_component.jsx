@@ -1,7 +1,9 @@
+import { ArrowLeft, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   Alert,
   Badge,
+  Breadcrumb,
   Button,
   ButtonGroup,
   Card,
@@ -10,37 +12,52 @@ import {
   Row,
   Spinner,
 } from "react-bootstrap";
+import { useNavigate, useParams } from "react-router-dom";
 
+import { useAuth } from "./authentication_provider_component.jsx";
 import TaskCreationForm from "./task_creation_form_component.jsx";
 import TaskEditForm from "./task_edit_form_component.jsx";
-// Import the useAuth hook from your authentication provider file
-import { useAuth } from "./authentication_provider_component.jsx";
 
 const API_BASE_URL = `http://localhost:5000/api`;
-// Main Dashboard Component
+
+/**
+ * Enhanced TasksDashboard Component with project scoping
+ *
+ * This component handles task management within the context of a specific project.
+ * It demonstrates several key React patterns:
+ * - URL parameter extraction for project scoping
+ * - Conditional rendering based on project context
+ * - Breadcrumb navigation for user orientation
+ * - Optimistic UI updates for better user experience
+ */
 const TasksDashboard = () => {
+  // Core task management state
   const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
+  console.log("🚀 ~ TasksDashboard ~ tasks:", tasks);
   const [error, setError] = useState(null);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(null);
+
+  // Project context state - helps provide navigation context
+  const [projectInfo, setProjectInfo] = useState(null);
+  const [projectLoading, setProjectLoading] = useState(true);
+
   const { token } = useAuth();
 
-  // Helper function to get auth headers
-  // const getAuthHeaders = () => {
-  //   const token = localStorage.getItem("token");
-  //   return {
-  //     "Content-Type": "application/json",
-  //     Authorization: `Bearer ${token}`,
-  //   };
-  // };
+  // Extract projectId from URL parameters - this is how we know which project we're viewing
+  const { projectId } = useParams();
 
-  const fetchTasks = async () => {
+  // Navigation function to go back to projects
+  const navigate = useNavigate();
+
+  /**
+   * Fetch project information to provide context
+   * This helps users understand which project they're working in
+   */
+  const fetchProjectInfo = async () => {
     try {
-      setLoading(true);
-      setError(null);
-
-      const response = await fetch(`${API_BASE_URL}/tasks`, {
+      setProjectLoading(true);
+      const response = await fetch(`${API_BASE_URL}/projects/${projectId}`, {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
@@ -48,32 +65,54 @@ const TasksDashboard = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch tasks: ${response.status}`);
+        throw new Error(`Failed to fetch project: ${response.status}`);
       }
 
       const result = await response.json();
-      setTasks(result.data || []);
+      setProjectInfo(result.data);
+      setTasks(result.data.tasks);
     } catch (error) {
-      console.error("Error fetching tasks:", error);
-      setError(error.message);
+      console.error("Error fetching project:", error);
+      setError(`Failed to load project information: ${error.message}`);
     } finally {
-      setLoading(false);
+      setProjectLoading(false);
     }
   };
 
+  /**
+   * Load both project info and tasks when component mounts or projectId changes
+   * This dual loading ensures we have both context and content
+   */
   useEffect(() => {
-    fetchTasks();
-  }, [token]);
+    if (projectId) {
+      fetchProjectInfo();
+    }
+    //fetchTasks();
+  }, [token, projectId]);
 
+  /**
+   * Handle new task creation
+   * When a task is created, we add it to our local state for immediate feedback
+   */
   const handleTaskCreated = (newTask) => {
+    // Validate that the task belongs to the current project
+    if (projectId && newTask.project_id !== projectId) {
+      console.warn("Task created but not associated with current project");
+    }
+    // Add to the beginning of the array for immediate visibility
     setTasks((prevTasks) => [newTask, ...prevTasks]);
   };
 
+  /**
+   * Task editing workflow
+   * We use a simple state flag to control which task is being edited
+   */
   const startEditing = (taskId) => {
     setEditingTaskId(taskId);
   };
 
   const handleTaskUpdated = (updatedTask) => {
+    // Update the task in our local state
     setTasks((prevTasks) =>
       prevTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task))
     );
@@ -85,6 +124,10 @@ const TasksDashboard = () => {
     setEditingTaskId(null);
   };
 
+  /**
+   * Toggle task completion status
+   * This provides immediate feedback while the API call completes
+   */
   const toggleTaskCompletion = async (taskId) => {
     const currentTask = tasks.find((task) => task.id === taskId);
     if (!currentTask) return;
@@ -93,8 +136,8 @@ const TasksDashboard = () => {
       const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           ...currentTask,
@@ -105,17 +148,25 @@ const TasksDashboard = () => {
       const data = await response.json();
 
       if (data.success) {
+        // Update local state with the new completion status
         setTasks((prevTasks) =>
           prevTasks.map((task) =>
             task.id === taskId ? { ...task, completed: !task.completed } : task
           )
         );
+      } else {
+        throw new Error(data.error || "Failed to update task");
       }
     } catch (error) {
       console.error("Error updating task:", error);
+      setError("Failed to update task completion status");
     }
   };
 
+  /**
+   * Delete a task with loading state
+   * We track which task is being deleted to provide specific loading feedback
+   */
   const deleteTask = async (taskId) => {
     try {
       setDeleteLoading(taskId);
@@ -131,17 +182,25 @@ const TasksDashboard = () => {
       const data = await response.json();
 
       if (data.success) {
+        // Remove the task from local state
         setTasks((currentTasks) =>
           currentTasks.filter((task) => task.id !== taskId)
         );
+      } else {
+        throw new Error(data.error || "Failed to delete task");
       }
     } catch (error) {
       console.error("Error deleting task:", error);
+      setError("Failed to delete task");
     } finally {
       setDeleteLoading(null);
     }
   };
 
+  /**
+   * Handle delete confirmation
+   * We use a confirm dialog to prevent accidental deletions
+   */
   const handleDeleteClick = (task) => {
     const confirmMessage = `Are you sure you want to delete the task "${task.title}"?\nThis action cannot be undone.`;
     if (window.confirm(confirmMessage)) {
@@ -149,10 +208,20 @@ const TasksDashboard = () => {
     }
   };
 
+  /**
+   * Navigation helper
+   * This takes users back to the projects overview
+   */
+  const handleBackToProjects = () => {
+    navigate("/projects");
+  };
+
+  // Calculate task statistics for the dashboard
   const incompleteTasks = tasks.filter((task) => !task.completed);
   const completedTasks = tasks.filter((task) => task.completed);
 
-  if (loading) {
+  // Loading state - show while fetching data
+  if (projectId && projectLoading) {
     return (
       <Container
         className="d-flex justify-content-center align-items-center"
@@ -160,18 +229,24 @@ const TasksDashboard = () => {
       >
         <div className="text-center">
           <Spinner animation="border" role="status" />
-          <div className="mt-2">Loading tasks...</div>
+          <div className="mt-2">{projectLoading && "Loading tasks"}</div>
         </div>
       </Container>
     );
   }
 
+  // Error state with contextual actions
   if (error) {
     return (
       <Container className="mt-4">
-        <Alert variant="danger">
+        <Alert variant="danger" dismissible onClose={() => setError(null)}>
           <Alert.Heading>Error Loading Tasks</Alert.Heading>
           <p>{error}</p>
+          {projectId && (
+            <Button variant="outline-primary" onClick={handleBackToProjects}>
+              ← Back to Projects
+            </Button>
+          )}
         </Alert>
       </Container>
     );
@@ -179,9 +254,47 @@ const TasksDashboard = () => {
 
   return (
     <Container className="py-4">
-      <TaskCreationForm onTaskCreated={handleTaskCreated} />
+      {/* Project Context Header - only show when we're in a project */}
+      {projectId && projectInfo && (
+        <Row className="mb-4">
+          <Col>
+            <div className="d-flex justify-content-between align-items-center">
+              <div>
+                {/* Breadcrumb navigation for user orientation */}
+                <Breadcrumb>
+                  <Breadcrumb.Item
+                    onClick={handleBackToProjects}
+                    style={{ cursor: "pointer" }}
+                    className="text-primary"
+                  >
+                    <FolderOpen size={16} className="me-1" />
+                    Projects
+                  </Breadcrumb.Item>
+                  <Breadcrumb.Item active>{projectInfo.name}</Breadcrumb.Item>
+                </Breadcrumb>
 
-      {/* Task Edit Form - conditionally rendered */}
+                <h1 className="mb-1">{projectInfo.name} - Tasks</h1>
+                {projectInfo.description && (
+                  <p className="text-muted">{projectInfo.description}</p>
+                )}
+              </div>
+
+              <Button variant="outline-primary" onClick={handleBackToProjects}>
+                <ArrowLeft size={16} className="me-1" />
+                Back to Projects
+              </Button>
+            </div>
+          </Col>
+        </Row>
+      )}
+
+      {/* Task Creation Form - pass projectId for automatic association */}
+      <TaskCreationForm
+        onTaskCreated={handleTaskCreated}
+        projectId={projectId}
+      />
+
+      {/* Task Edit Form - conditionally rendered based on editing state */}
       {editingTaskId && (
         <Row className="mb-4">
           <Col>
@@ -194,7 +307,7 @@ const TasksDashboard = () => {
         </Row>
       )}
 
-      {/* Task Statistics */}
+      {/* Task Statistics Dashboard */}
       <Row className="mb-4">
         <Col>
           <Card className="bg-light">
@@ -225,10 +338,12 @@ const TasksDashboard = () => {
       <Row>
         <Col>
           {tasks.length === 0 ? (
-            <Card className="text-center">
+            <Card className="text-center py-4">
               <Card.Body>
                 <Card.Text className="text-muted">
-                  No tasks found. Create your first task above!
+                  {projectId
+                    ? `No tasks found for this project. Create your first task above!`
+                    : `No tasks found. Create your first task above!`}
                 </Card.Text>
               </Card.Body>
             </Card>

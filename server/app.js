@@ -253,80 +253,6 @@ app.get("/api/auth/profile", verifyToken, async (req, res) => {
   }
 });
 
-// Your first real API endpoint - get all tasks
-app.get("/api/tasks", verifyToken, async (req, res) => {
-  try {
-    // Query the database for all tasks with user information
-    const result = await db.query(
-      `
-            SELECT 
-                tasks.id,
-                tasks.title,
-                tasks.description,
-                tasks.completed,
-                tasks.created_at,
-                tasks.updated_at,
-                tasks.due_date,
-                users.name as user_name,
-                users.email as user_email
-            FROM tasks 
-            JOIN users ON tasks.user_id = users.id
-            WHERE tasks.user_id = $1 
-            ORDER BY tasks.created_at DESC
-        `,
-      [req.user.userId]
-    );
-    // Send the results back as JSON
-    res.json({
-      success: true,
-      data: result.rows,
-      count: result.rows.length,
-    });
-  } catch (error) {
-    console.error("Error fetching tasks:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch tasks",
-    });
-  }
-});
-
-// Endpoint to create a new task
-app.post("/api/tasks", verifyToken, async (req, res) => {
-  try {
-    const { title, description, due_date } = req.body;
-
-    // Validate required fields
-    if (!title || !req.user.userId) {
-      return res.status(400).json({
-        success: false,
-        error: "Title and user_id are required",
-      });
-    }
-
-    // Insert the new task into the database
-    const result = await db.query(
-      `
-            INSERT INTO tasks (title, description, user_id, due_date)
-            VALUES ($1, $2, $3, $4)
-            RETURNING *
-        `,
-      [title, description, req.user.userId, due_date]
-    );
-
-    res.status(201).json({
-      success: true,
-      data: result.rows[0],
-    });
-  } catch (error) {
-    console.error("Error creating task:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to create task",
-    });
-  }
-});
-
 // Get a specific task by ID
 app.get("/api/tasks/:id", verifyToken, async (req, res) => {
   try {
@@ -622,9 +548,6 @@ app.delete("/api/tasks/:id", verifyToken, async (req, res) => {
   }
 });
 
-// Add these new endpoints to your existing server.js file
-// These endpoints handle project management and the new project-task relationship
-
 // GET /api/projects - Fetch all projects for the authenticated user
 app.get("/api/projects", verifyToken, async (req, res) => {
   try {
@@ -677,7 +600,7 @@ app.post("/api/projects", verifyToken, async (req, res) => {
 
     // Check if project name already exists for this user
     const existingProject = await db.query(
-      "SELECT id FROM projects WHERE user_id = $1 AND LOWER(name) = LOWER($2)",
+      "SELECT id FROM projects  WHERE user_id = $1 AND LOWER(name) = LOWER($2)",
       [req.user.userId, name.trim()]
     );
 
@@ -975,6 +898,7 @@ app.get("/api/tasks", verifyToken, async (req, res) => {
 app.post("/api/tasks", verifyToken, async (req, res) => {
   try {
     const { title, description, due_date, project_id } = req.body;
+    //const {project_id}
 
     // Validate required fields
     if (!title || !project_id) {

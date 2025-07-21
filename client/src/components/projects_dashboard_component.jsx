@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   Calendar,
   CheckCircle,
   Edit,
@@ -20,18 +21,14 @@ import {
   Row,
   Spinner,
 } from "react-bootstrap";
+import { useNavigate } from "react-router-dom"; // Added for navigation
 import { useAuth } from "./authentication_provider_component";
-import Dashboard from "./tasks_dash_board_component";
-// Mock auth hook - replace with your actual authentication
-// const useAuth = () => {
-//   const [token] = useState("your-jwt-token-here");
-//   return { token };
-// };
 
 const API_BASE_URL = "http://localhost:5000/api";
 
 const ProjectsDashboard = () => {
   const [projects, setProjects] = useState([]);
+  console.log("🚀 ~ ProjectsDashboard ~ projects:", projects);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -41,36 +38,38 @@ const ProjectsDashboard = () => {
   const [submitting, setSubmitting] = useState(false);
   const { token } = useAuth();
 
+  // Initialize the navigate function from React Router
+  const navigate = useNavigate();
+
   // Fetch all projects when component mounts
-  useEffect(() => {
-    fetchProjects();
-  }, []);
+  useEffect(
+    () => async () => {
+      try {
+        setLoading(true);
+        setError(null);
 
-  const fetchProjects = async () => {
-    try {
-      setLoading(true);
-      setError(null);
+        const response = await fetch(`${API_BASE_URL}/projects`, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
-      const response = await fetch(`${API_BASE_URL}/projects`, {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
+        if (!response.ok) {
+          throw new Error(`Failed to fetch projects: ${response.status}`);
+        }
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch projects: ${response.status}`);
+        const result = await response.json();
+        setProjects(result.data || []);
+      } catch (error) {
+        console.error("Error fetching projects:", error);
+        setError(error.message);
+      } finally {
+        setLoading(false);
       }
-
-      const result = await response.json();
-      setProjects(result.data || []);
-    } catch (error) {
-      console.error("Error fetching projects:", error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [token]
+  );
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
@@ -92,6 +91,9 @@ const ProjectsDashboard = () => {
         setProjects((prev) => [result.data, ...prev]);
         setShowCreateModal(false);
         setFormData({ name: "", description: "" });
+
+        // Optional: Navigate to the newly created project's tasks
+        // navigate(`/projects/${result.data.id}/tasks`);
       } else {
         setError(result.error);
       }
@@ -191,15 +193,13 @@ const ProjectsDashboard = () => {
 
   const calculateProgress = (completed, total) => {
     if (parseInt(total) === 0) return 0;
-    return Math.round((completed / total) * 100);
+    return Math.floor((completed / total) * 100);
   };
 
+  // This is the key change: replaced the placeholder with proper navigation
   const handleViewProject = (projectId) => {
-    // In a real app, you would use React Router here
-    // For now, we'll just show an alert
-    alert(
-      `Would navigate to project ${projectId} - implement with React Router`
-    );
+    // Navigate to the project's tasks using the nested URL structure
+    navigate(`/projects/${projectId}/tasks`);
   };
 
   if (loading) {
@@ -346,9 +346,10 @@ const ProjectsDashboard = () => {
                         variant="primary"
                         size="sm"
                         onClick={() => handleViewProject(project.id)}
-                        className="flex-grow-1"
+                        className="flex-grow-1 d-flex align-items-center justify-content-center gap-2"
                       >
                         View Tasks
+                        <ArrowRight size={14} />
                       </Button>
                       <Button
                         variant="outline-secondary"
