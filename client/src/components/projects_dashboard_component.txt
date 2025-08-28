@@ -7,7 +7,6 @@ import {
   Plus,
   Trash2,
   Upload,
-  X,
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import {
@@ -16,7 +15,6 @@ import {
   Button,
   Card,
   Col,
-  Collapse,
   Container,
   Form,
   Modal,
@@ -24,15 +22,13 @@ import {
   Row,
   Spinner,
 } from "react-bootstrap";
-import { useNavigate } from "react-router-dom";
-import FileUploadComponent from "./file_upload_component"; // Your file upload component
-import { useAuth } from "./hooks/use_auth";
+import { useNavigate } from "react-router-dom"; // Added for navigation
+import { useAuth } from "./authentication_provider_component";
 
 const API_BASE_URL = "http://localhost:5000/api";
 
 const ProjectsDashboard = () => {
   const [projects, setProjects] = useState([]);
-  console.log("🚀 ~ ProjectsDashboard ~ projects:", projects);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -40,22 +36,24 @@ const ProjectsDashboard = () => {
   const [editingProject, setEditingProject] = useState(null);
   const [formData, setFormData] = useState({ name: "", description: "" });
   const [submitting, setSubmitting] = useState(false);
+  // eslint-disable-next-line no-unused-vars
   const [successMessage, setSuccessMessage] = useState("");
-
-  // File upload state
-  const [expandedUpload, setExpandedUpload] = useState({}); // Track which project's upload is expanded
-
   const { token } = useAuth();
+
+  // Extract projectId from URL parameters - this is how we know which project we're viewing
+  //const { projectId } = useParams();
+
+  // Initialize the navigate function from React Router
   const navigate = useNavigate();
 
   // Fetch all projects when component mounts
-  useEffect(() => {
-    const fetchProjects = async () => {
+  useEffect(
+    () => async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const response = await fetch(`${API_BASE_URL}/projects/with-tasks`, {
+        const response = await fetch(`${API_BASE_URL}/projects`, {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
@@ -74,10 +72,9 @@ const ProjectsDashboard = () => {
       } finally {
         setLoading(false);
       }
-    };
-
-    fetchProjects();
-  }, [token]);
+    },
+    [token]
+  );
 
   const handleCreateProject = async (e) => {
     e.preventDefault();
@@ -99,8 +96,9 @@ const ProjectsDashboard = () => {
         setProjects((prev) => [result.data, ...prev]);
         setShowCreateModal(false);
         setFormData({ name: "", description: "" });
-        setSuccessMessage("Project created successfully!");
-        setTimeout(() => setSuccessMessage(""), 3000);
+
+        // Optional: Navigate to the newly created project's tasks
+        // navigate(`/projects/${result.data.id}/tasks`);
       } else {
         setError(result.error);
       }
@@ -140,8 +138,6 @@ const ProjectsDashboard = () => {
         setShowEditModal(false);
         setEditingProject(null);
         setFormData({ name: "", description: "" });
-        setSuccessMessage("Project updated successfully!");
-        setTimeout(() => setSuccessMessage(""), 3000);
       } else {
         setError(result.error);
       }
@@ -171,8 +167,6 @@ const ProjectsDashboard = () => {
           setProjects((prev) =>
             prev.filter((project) => project.id !== projectId)
           );
-          setSuccessMessage("Project deleted successfully!");
-          setTimeout(() => setSuccessMessage(""), 3000);
         } else {
           setError(result.error);
         }
@@ -180,42 +174,6 @@ const ProjectsDashboard = () => {
         console.error("Error deleting project:", error);
         setError("Failed to delete project");
       }
-    }
-  };
-
-  // File upload handlers
-  const toggleUploadSection = (projectId) => {
-    setExpandedUpload((prev) => ({
-      ...prev,
-      [projectId]: !prev[projectId],
-    }));
-  };
-
-  // Also, you might want to update your handleFilesUploaded function to handle task associations:
-  const handleFilesUploaded = (
-    projectId,
-    uploadedFiles,
-    eventType = "upload"
-  ) => {
-    console.log(`Files uploaded to project ${projectId}:`, uploadedFiles);
-    console.log("Event type:", eventType);
-
-    if (eventType === "upload") {
-      // Show success message with task information if available
-      const taskInfo = uploadedFiles.some((file) => file.task_id)
-        ? " and associated with selected tasks"
-        : "";
-
-      setSuccessMessage(
-        `${uploadedFiles.length} file(s) uploaded successfully to project${taskInfo}!`
-      );
-      setTimeout(() => setSuccessMessage(""), 5000);
-
-      // Close the upload section
-      setExpandedUpload((prev) => ({ ...prev, [projectId]: false }));
-
-      // Optional: Refresh project data to get updated file counts
-      // You could add a fetchProjects() call here if your API returns file counts
     }
   };
 
@@ -243,8 +201,26 @@ const ProjectsDashboard = () => {
     return Math.floor((completed / total) * 100);
   };
 
+  // This is the key change: replaced the placeholder with proper navigation
   const handleViewProject = (projectId) => {
+    // Navigate to the project's tasks using the nested URL structure
     navigate(`/projects/${projectId}/tasks`);
+  };
+
+  // const handleFilesUploaded = (uploadedFiles) => {
+  //   console.log("Files uploaded:", uploadedFiles);
+
+  //   // Refresh your data (tasks, projects, etc.)
+  //   // if (projectId) {
+  //   //   fetchProjectInfo(); // Refresh project with new files
+  //   // }
+
+  //   // Optional: Show success message
+  //   setSuccessMessage(`${uploadedFiles.length} files uploaded successfully!`);
+  // };
+
+  const handleViewFileUpload = (projectId) => {
+    navigate(`/projects/${projectId}/file-upload`);
   };
 
   if (loading) {
@@ -284,18 +260,6 @@ const ProjectsDashboard = () => {
           </div>
         </Col>
       </Row>
-
-      {/* Success Message */}
-      {successMessage && (
-        <Alert
-          variant="success"
-          onClose={() => setSuccessMessage("")}
-          dismissible
-        >
-          {successMessage}
-        </Alert>
-      )}
-
       {/* Error Alert */}
       {error && (
         <Alert variant="danger" onClose={() => setError(null)} dismissible>
@@ -323,16 +287,15 @@ const ProjectsDashboard = () => {
         ) : (
           projects.map((project) => {
             const progress = calculateProgress(
-              project.statistics.completed_tasks,
-              project.statistics.total_tasks
+              project.completed_count,
+              project.task_count
             );
             const isCompleted =
-              project.statistics.total_tasks > 0 &&
-              project.statistics.completed_tasks ===
-                project.statistics.total_tasks;
+              project.task_count > 0 &&
+              project.completed_count === project.task_count;
 
             return (
-              <Col md={6} lg={6} key={project.id} className="mb-4">
+              <Col md={6} lg={4} key={project.id} className="mb-4">
                 <Card
                   className={`h-100 ${isCompleted ? "border-success" : ""}`}
                 >
@@ -346,16 +309,17 @@ const ProjectsDashboard = () => {
                         </Badge>
                       )}
                     </div>
+
                     <Card.Text className="text-muted flex-grow-1">
                       {project.description || "No description provided"}
                     </Card.Text>
+
                     {/* Progress Section */}
                     <div className="mb-3">
                       <div className="d-flex justify-content-between align-items-center mb-1">
                         <small className="text-muted">Progress</small>
                         <small className="text-muted">
-                          {project.statistics.completed_tasks}/
-                          {project.statistics.total_tasks} tasks
+                          {project.completed_count}/{project.task_count} tasks
                         </small>
                       </div>
                       <ProgressBar
@@ -369,6 +333,7 @@ const ProjectsDashboard = () => {
                         </small>
                       </div>
                     </div>
+
                     {/* Project Stats */}
                     <div className="d-flex justify-content-between align-items-center mb-3">
                       <div className="d-flex gap-2">
@@ -377,9 +342,9 @@ const ProjectsDashboard = () => {
                           className="d-flex align-items-center gap-1"
                         >
                           <Calendar size={12} />
-                          {project.statistics.total_tasks} tasks
+                          {project.task_count} tasks
                         </Badge>
-                        {project.statistics.completed_tasks > 0 && (
+                        {project.completed_count > 0 && (
                           <Badge
                             bg="success"
                             className="d-flex align-items-center gap-1"
@@ -395,50 +360,18 @@ const ProjectsDashboard = () => {
                       </small>
                     </div>
 
-                    <Collapse in={expandedUpload[project.id]}>
-                      <div className="border-top pt-3 mb-3">
-                        <div className="d-flex justify-content-between align-items-center mb-2">
-                          <h6 className="mb-0">
-                            <Upload size={16} className="me-2" />
-                            Upload Project Files
-                          </h6>
-                          <Button
-                            variant="outline-secondary"
-                            size="sm"
-                            onClick={() => toggleUploadSection(project.id)}
-                          >
-                            <X size={14} />
-                          </Button>
-                        </div>
-                        <FileUploadComponent
-                          key={project.id}
-                          projectId={project.id}
-                          tasks={project.tasks || []} // Pass the tasks array
-                          allowTaskSelection={true} // Enable task selection
-                          token={token}
-                          onFilesUploaded={(files) =>
-                            handleFilesUploaded(project.id, files)
-                          }
-                          maxFiles={5}
-                          maxFileSize={10 * 1024 * 1024} // 10MB
-                          allowedTypes={[
-                            "image/*",
-                            "application/pdf",
-                            ".doc",
-                            ".docx",
-                            ".txt",
-                            ".md",
-                            ".zip",
-                            ".rar",
-                            ".png",
-                            ".jpg",
-                          ]}
-                        />
-                        ;
-                      </div>
-                    </Collapse>
                     {/* Action Buttons */}
                     <div className="d-flex gap-2 mt-auto">
+                      {/* <Button
+                        style={{ backgroundColor: "#228B22", color: "white" }}
+                        size="sm"
+                        onClick={() => handleViewFileUpload(project.id)}
+                        className="flex-grow-1 d-flex align-items-center justify-content-center gap-2"
+                      >
+                        <Upload size={20} className="text-muted" />
+                        Upload Files for Project
+                      </Button> */}
+
                       <Button
                         variant="primary"
                         size="sm"
@@ -449,18 +382,9 @@ const ProjectsDashboard = () => {
                         <ArrowRight size={14} />
                       </Button>
                       <Button
-                        variant="outline-success"
-                        size="sm"
-                        onClick={() => toggleUploadSection(project.id)}
-                        title="Upload Files"
-                      >
-                        <Upload size={14} />
-                      </Button>
-                      <Button
                         variant="outline-secondary"
                         size="sm"
                         onClick={() => openEditModal(project)}
-                        title="Edit Project"
                       >
                         <Edit size={14} />
                       </Button>
@@ -470,7 +394,6 @@ const ProjectsDashboard = () => {
                         onClick={() =>
                           handleDeleteProject(project.id, project.name)
                         }
-                        title="Delete Project"
                       >
                         <Trash2 size={14} />
                       </Button>
@@ -482,7 +405,6 @@ const ProjectsDashboard = () => {
           })
         )}
       </Row>
-
       {/* Create Project Modal */}
       <Modal show={showCreateModal} onHide={closeModals}>
         <Modal.Header closeButton>
@@ -535,7 +457,6 @@ const ProjectsDashboard = () => {
           </Modal.Footer>
         </Form>
       </Modal>
-
       {/* Edit Project Modal */}
       <Modal show={showEditModal} onHide={closeModals}>
         <Modal.Header closeButton>

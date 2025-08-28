@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Alert, Button, Card, Form, Spinner } from "react-bootstrap";
-import { useAuth } from "./authentication_provider_component";
+import { useAuth } from "./hooks/use_auth";
 
 // Register Component
 const RegisterForm = ({ onSwitchToLogin }) => {
@@ -11,8 +11,9 @@ const RegisterForm = ({ onSwitchToLogin }) => {
     confirmPassword: "",
     name: "",
   });
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const { register } = useAuth();
 
   const handleChange = (e) => {
@@ -46,11 +47,18 @@ const RegisterForm = ({ onSwitchToLogin }) => {
       formData.name
     );
 
-    if (!result.success) {
-      setError(result.error);
-    }
-
     setLoading(false);
+
+    // ✅ Redirect to login after successful registration
+    if (result.success) {
+      setSuccess("✅ Account created successfully. Please log in.");
+      // Switch to login after 2 seconds
+      setTimeout(() => {
+        onSwitchToLogin();
+      }, 5000);
+    } else {
+      setError(result.error || "Registration failed");
+    }
   };
 
   return (
@@ -63,7 +71,7 @@ const RegisterForm = ({ onSwitchToLogin }) => {
             {error}
           </Alert>
         )}
-
+        {success && <Alert variant="success">{success}</Alert>}
         <Form onSubmit={handleSubmit}>
           <Form.Group className="mb-3">
             <Form.Label>Full Name</Form.Label>

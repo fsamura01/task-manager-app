@@ -1,21 +1,8 @@
-import { createContext, useContext, useEffect, useState } from "react";
-
-// Authentication Context
-const AuthContext = createContext();
-
-// Custom hook to use auth context
-// eslint-disable-next-line react-refresh/only-export-components
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth must be used within AuthProvider");
-  }
-  return context;
-};
+import { useEffect, useState } from "react";
+import { AuthContext } from "./hooks/use_auth";
 
 // AuthProvider Component
 const AuthProvider = ({ children }) => {
-  console.log("AuthProvider received props:", { children });
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -99,9 +86,9 @@ const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (data.success) {
-        setUser(data.data.user);
-        setToken(data.data.token);
-        localStorage.setItem("token", data.data.token);
+        // setUser(data.data.user);
+        // setToken(data.data.token);
+        // localStorage.setItem("token", data.data.token);
         return { success: true };
       } else {
         return { success: false, error: data.error };
@@ -159,7 +146,7 @@ const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={value}>
       {loading ? (
-        <div>loading...</div> // Or your loading component
+        <div className="m-4">loading...</div> // Or your loading component
       ) : (
         <>{children}</>
       )}

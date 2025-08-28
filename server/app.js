@@ -1,56 +1,40 @@
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const rateLimit = require("express-rate-limit");
 const express = require("express");
 const cors = require("cors");
 const db = require("./database");
+const fs = require("fs-extra");
+const path = require("path");
+const calculateFileHash = require("./utils/calculate-filehash");
+const { upload, handleUploadErrors } = require("./middleware/upload");
+const verifyToken = require("./middleware/verifytoken");
+const {
+  loginLimiter,
+  generateToken,
+} = require("./utils/jwttoken-loginlimiter");
+
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || "your-fallback-secret-key";
 console.log(require("crypto").randomBytes(32).toString("base64")); // 'hex'
 
 // Middleware setup
 app.use(cors());
 app.use(express.json());
 
+// Static file serving with basic security
+app.use(
+  "/uploads",
+  express.static("uploads", {
+    // Add security headers to prevent certain attacks
+    setHeaders: (res, path, stat) => {
+      res.set("X-Content-Type-Options", "nosniff");
+      res.set("Content-Disposition", "inline"); // or 'attachment' to force download
+    },
+  })
+);
 // Test database connection on startup
 db.testConnection();
-
-// Create different rate limiters for different types of endpoints
-const loginLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 15 minutes
-  max: 2, // Maximum 5 attempts per window per IP
-  message: {
-    success: false,
-    error: {
-      code: "TOO_MANY_ATTEMPTS",
-      message: "Too many login attempts. Please try again in 15 minutes.",
-    },
-  },
-  // Skip successful requests from counting against the limit
-  skipSuccessfulRequests: true,
-  // Consider implementing more sophisticated tracking by user account
-  // not just IP address, to prevent attackers from bypassing IP-based limits
-  keyGenerator: (req) => {
-    // You might combine IP and username for more precise rate limiting
-    return req.ip + ":" + (req.body.email || "");
-  },
-});
-
-// Helper function to generate JWT tokens
-// Think of this like creating a secure ID badge with expiration date
-const generateToken = (userId, username) => {
-  return jwt.sign(
-    {
-      userId: userId,
-      username: username,
-    },
-    JWT_SECRET,
-    { expiresIn: "24h" } // Token expires in 24 hours for security
-  );
-};
 
 // REGISTRATION ENDPOINT
 // This is like the "sign up for a new account" process
@@ -199,36 +183,6 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
     });
   }
 });
-
-// MIDDLEWARE TO VERIFY JWT TOKENS
-// This is like the security guard that checks key cards
-const verifyToken = (req, res, next) => {
-  // Look for token in Authorization header
-  const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(" ")[1]; // Expected format: "Bearer TOKEN"
-
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      error: "Access token required",
-    });
-  }
-
-  try {
-    // Verify the token is valid and not expired
-    const decoded = jwt.verify(token, JWT_SECRET);
-    console.log("🚀 ~ verifyToken ~ decoded:", decoded);
-
-    // Add user info to request object for use in other routes
-    req.user = decoded;
-    next(); // Continue to the next middleware/route
-  } catch (error) {
-    return res.status(403).json({
-      success: false,
-      error: "Invalid or expired token",
-    });
-  }
-};
 
 // PROTECTED ROUTE EXAMPLE
 // This shows how to use the middleware to protect routes
@@ -635,6 +589,284 @@ app.post("/api/projects", verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/projects/with-tasks - Fetch all projects with their tasks for authenticated user
+// This endpoint provides a comprehensive view of the user's project structure
+app.get("/api/projects/with-tasks", verifyToken, async (req, res) => {
+  try {
+    // Extract optional query parameters for filtering and pagination
+    const {
+      include_completed = "true", // Whether to include completed tasks
+      include_empty_projects = "true", // Whether to include projects with no tasks
+      limit, // Optional limit on number of projects
+      offset = 0, // Pagination offset
+    } = req.query;
+
+    console.log(`Fetching projects with tasks for user ${req.user.userId}`);
+
+    // Step 1: Build the main query to get projects with task counts
+    // We use LEFT JOIN to ensure we get projects even if they have no tasks
+    // The aggregation functions help us get useful statistics about each project
+    let projectsQuery = `
+      SELECT 
+        p.id,
+        p.name,
+        p.description,
+        p.created_at,
+        p.updated_at,
+        COUNT(t.id) as total_task_count,
+        COUNT(CASE WHEN t.completed = true THEN 1 END) as completed_task_count,
+        COUNT(CASE WHEN t.completed = false THEN 1 END) as pending_task_count,
+        COUNT(CASE WHEN t.due_date < CURRENT_DATE AND t.completed = false THEN 1 END) as overdue_task_count,
+        MAX(t.updated_at) as last_task_activity
+      FROM projects p
+      LEFT JOIN tasks t ON p.id = t.project_id
+      WHERE p.user_id = $1
+    `;
+
+    let queryParams = [req.user.userId];
+    let paramIndex = 2;
+
+    // Step 2: Add filtering based on include_empty_projects parameter
+    // This allows clients to exclude projects that have no tasks
+    if (include_empty_projects === "false") {
+      projectsQuery += ` AND EXISTS (SELECT 1 FROM tasks WHERE project_id = p.id)`;
+    }
+
+    // Group by all non-aggregated columns (required for PostgreSQL)
+    projectsQuery += ` 
+      GROUP BY p.id, p.name, p.description, p.created_at, p.updated_at
+      ORDER BY p.created_at DESC
+    `;
+
+    // Step 3: Add pagination if limit is specified
+    // Pagination helps manage large datasets and improves performance
+    if (limit) {
+      projectsQuery += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+      queryParams.push(parseInt(limit), parseInt(offset));
+    }
+
+    // Execute the projects query
+    const projectsResult = await db.query(projectsQuery, queryParams);
+
+    // Step 4: If no projects found, return early with empty result
+    // This avoids unnecessary database queries when user has no projects
+    if (projectsResult.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: "No projects found for this user",
+        data: [],
+        summary: {
+          total_projects: 0,
+          total_tasks: 0,
+          completed_tasks: 0,
+          pending_tasks: 0,
+          overdue_tasks: 0,
+        },
+      });
+    }
+
+    // Step 5: Get project IDs for the tasks query
+    // We'll fetch all tasks for the returned projects in a single query
+    const projectIds = projectsResult.rows.map((project) => project.id);
+
+    // Step 6: Build and execute the tasks query
+    // This fetches all tasks for the projects we found, with optional filtering
+    let tasksQuery = `
+      SELECT 
+        t.id,
+        t.title,
+        t.description,
+        t.completed,
+        t.created_at,
+        t.updated_at,
+        t.due_date,
+        t.project_id,
+        -- Calculate if task is overdue
+        CASE 
+          WHEN t.due_date < CURRENT_DATE AND t.completed = false THEN true
+          ELSE false
+        END as is_overdue,
+        -- Calculate days until due (negative if overdue)
+        CASE 
+          WHEN t.due_date IS NOT NULL THEN 
+            EXTRACT(DAYS FROM (t.due_date - CURRENT_DATE))::integer
+          ELSE NULL
+        END as days_until_due
+      FROM tasks t
+      WHERE t.project_id = ANY($1)
+    `;
+
+    const taskParams = [projectIds];
+
+    // Add completed task filtering if requested
+    if (include_completed === "false") {
+      tasksQuery += ` AND t.completed = false`;
+    }
+
+    // Order tasks by due date (nulls last) and creation date
+    tasksQuery += ` ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC`;
+
+    const tasksResult = await db.query(tasksQuery, taskParams);
+
+    // Step 7: Group tasks by project_id for efficient lookup
+    // This creates a map where each key is a project ID and value is array of tasks
+    const tasksByProject = {};
+    tasksResult.rows.forEach((task) => {
+      if (!tasksByProject[task.project_id]) {
+        tasksByProject[task.project_id] = [];
+      }
+      tasksByProject[task.project_id].push(task);
+    });
+
+    // Step 8: Combine projects with their tasks and calculate additional metrics
+    // We enhance each project object with its tasks and computed statistics
+    const projectsWithTasks = projectsResult.rows.map((project) => {
+      const projectTasks = tasksByProject[project.id] || [];
+
+      // Calculate additional project-level metrics
+      const upcomingTasks = projectTasks.filter(
+        (task) =>
+          !task.completed &&
+          task.due_date &&
+          task.days_until_due !== null &&
+          task.days_until_due >= 0 &&
+          task.days_until_due <= 7
+      );
+
+      const recentActivity = projectTasks.filter((task) => {
+        const daysSinceUpdate =
+          (Date.now() - new Date(task.updated_at).getTime()) /
+          (1000 * 60 * 60 * 24);
+        return daysSinceUpdate <= 7;
+      });
+
+      return {
+        // Project basic information
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        created_at: project.created_at,
+        updated_at: project.updated_at,
+
+        // Task statistics (from aggregation query)
+        statistics: {
+          total_tasks: parseInt(project.total_task_count),
+          completed_tasks: parseInt(project.completed_task_count),
+          pending_tasks: parseInt(project.pending_task_count),
+          overdue_tasks: parseInt(project.overdue_task_count),
+          upcoming_tasks: upcomingTasks.length, // Due within 7 days
+          recent_activity_count: recentActivity.length, // Updated within 7 days
+          completion_percentage:
+            project.total_task_count > 0
+              ? Math.round(
+                  (project.completed_task_count / project.total_task_count) *
+                    100
+                )
+              : 0,
+        },
+
+        // Project status indicators
+        status: {
+          has_tasks: parseInt(project.total_task_count) > 0,
+          has_overdue_tasks: parseInt(project.overdue_task_count) > 0,
+          has_upcoming_deadlines: upcomingTasks.length > 0,
+          is_completed:
+            parseInt(project.total_task_count) > 0 &&
+            parseInt(project.completed_task_count) ===
+              parseInt(project.total_task_count),
+          last_activity: project.last_task_activity,
+        },
+
+        // All tasks for this project
+        tasks: projectTasks,
+      };
+    });
+
+    // Step 9: Calculate overall summary statistics
+    // This provides useful aggregate information across all projects
+    const summary = {
+      total_projects: projectsWithTasks.length,
+      projects_with_tasks: projectsWithTasks.filter(
+        (p) => p.statistics.total_tasks > 0
+      ).length,
+      total_tasks: projectsWithTasks.reduce(
+        (sum, p) => sum + p.statistics.total_tasks,
+        0
+      ),
+      completed_tasks: projectsWithTasks.reduce(
+        (sum, p) => sum + p.statistics.completed_tasks,
+        0
+      ),
+      pending_tasks: projectsWithTasks.reduce(
+        (sum, p) => sum + p.statistics.pending_tasks,
+        0
+      ),
+      overdue_tasks: projectsWithTasks.reduce(
+        (sum, p) => sum + p.statistics.overdue_tasks,
+        0
+      ),
+      projects_with_overdue_tasks: projectsWithTasks.filter(
+        (p) => p.statistics.overdue_tasks > 0
+      ).length,
+      overall_completion_percentage: 0,
+    };
+
+    // Calculate overall completion percentage
+    if (summary.total_tasks > 0) {
+      summary.overall_completion_percentage = Math.round(
+        (summary.completed_tasks / summary.total_tasks) * 100
+      );
+    }
+
+    // Step 10: Log successful operation for monitoring
+    console.log(
+      `Successfully retrieved ${summary.total_projects} projects with ${summary.total_tasks} tasks for user ${req.user.userId}`
+    );
+
+    // Step 11: Return the comprehensive response
+    res.json({
+      success: true,
+      message: `Retrieved ${summary.total_projects} projects with their tasks`,
+      data: projectsWithTasks,
+      summary: summary,
+      // Include pagination info if limit was used
+      ...(limit && {
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          returned_count: projectsWithTasks.length,
+        },
+      }),
+    });
+  } catch (error) {
+    console.error("Error fetching projects with tasks:", error);
+
+    // Provide specific error handling for common database issues
+    if (error.code === "42P01") {
+      return res.status(500).json({
+        success: false,
+        error: "Database schema error",
+        message: "Required tables not found. Please check database setup.",
+      });
+    }
+
+    if (error.code === "42703") {
+      return res.status(500).json({
+        success: false,
+        error: "Database column error",
+        message: "Required columns not found. Please check database schema.",
+      });
+    }
+
+    // Generic error response
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch projects with tasks",
+      message: "An internal server error occurred while retrieving the data",
+    });
+  }
+});
+
 // GET /api/projects/:id - Get a specific project with its tasks
 app.get("/api/projects/:id", verifyToken, async (req, res) => {
   try {
@@ -945,9 +1177,900 @@ app.post("/api/tasks", verifyToken, async (req, res) => {
   }
 });
 
+/**POST /api/files - Upload single file (can be associated with task/project or standalone)
+Updated POST /api/files endpoint to handle multiple task associations**/
+app.post(
+  "/api/files",
+  verifyToken,
+  upload.single("file"),
+  handleUploadErrors,
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          error: "No file provided",
+          message: "Please select a file to upload",
+        });
+      }
+
+      // Get associations from request body
+      const { task_id, task_ids, project_id, description } = req.body;
+
+      console.log(
+        `Processing upload for user ${req.user.userId}: ${req.file.originalname}`
+      );
+
+      // Handle both single task_id and multiple task_ids
+      let taskIdsToProcess = [];
+      if (task_id) {
+        taskIdsToProcess = [parseInt(task_id)];
+      } else if (task_ids) {
+        // task_ids can be a string "1,2,3" or array [1,2,3]
+        if (Array.isArray(task_ids)) {
+          taskIdsToProcess = task_ids.map((id) => parseInt(id));
+        } else if (typeof task_ids === "string") {
+          taskIdsToProcess = task_ids
+            .split(",")
+            .map((id) => parseInt(id.trim()));
+        }
+      }
+
+      // Validate all tasks if provided
+      if (taskIdsToProcess.length > 0) {
+        const taskCheck = await db.query(
+          "SELECT id FROM tasks WHERE id = ANY($1) AND user_id = $2",
+          [taskIdsToProcess, req.user.userId]
+        );
+
+        if (taskCheck.rows.length !== taskIdsToProcess.length) {
+          await fs.remove(req.file.path);
+          return res.status(404).json({
+            success: false,
+            error: "One or more tasks not found or access denied",
+          });
+        }
+      }
+
+      // Validate project if provided
+      if (project_id) {
+        const projectExists = await db.query(
+          "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+          [parseInt(project_id), req.user.userId]
+        );
+
+        if (projectExists.rows.length === 0) {
+          await fs.remove(req.file.path);
+          return res.status(404).json({
+            success: false,
+            error: "Project not found or access denied",
+          });
+        }
+      }
+
+      const fileHash = await calculateFileHash(req.file.path);
+      const createdFiles = [];
+
+      // If no tasks specified, create one record with project association only
+      if (taskIdsToProcess.length === 0) {
+        const fileRecord = await db.query(
+          `INSERT INTO files (
+            filename, stored_filename, file_path, file_size, mime_type, 
+            file_extension, upload_hash, user_id, task_id, project_id, is_validated
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+          RETURNING *`,
+          [
+            req.file.originalname,
+            req.file.filename,
+            req.file.path,
+            req.file.size,
+            req.file.mimetype,
+            path.extname(req.file.originalname).toLowerCase(),
+            fileHash,
+            req.user.userId,
+            null,
+            project_id ? parseInt(project_id) : null,
+            true,
+          ]
+        );
+        createdFiles.push(fileRecord.rows[0]);
+      } else {
+        // Create one file record for each task
+        for (const taskId of taskIdsToProcess) {
+          const fileRecord = await db.query(
+            `INSERT INTO files (
+              filename, stored_filename, file_path, file_size, mime_type, 
+              file_extension, upload_hash, user_id, task_id, project_id, is_validated
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+            RETURNING *`,
+            [
+              req.file.originalname,
+              req.file.filename,
+              req.file.path,
+              req.file.size,
+              req.file.mimetype,
+              path.extname(req.file.originalname).toLowerCase(),
+              fileHash,
+              req.user.userId,
+              taskId,
+              project_id ? parseInt(project_id) : null,
+              true,
+            ]
+          );
+          createdFiles.push(fileRecord.rows[0]);
+        }
+      }
+
+      console.log(
+        `File uploaded successfully: ${createdFiles.length} record(s) created`
+      );
+
+      // Return the first file record (they're all the same except for task_id)
+      const primaryRecord = createdFiles[0];
+
+      res.status(201).json({
+        success: true,
+        message: `File uploaded successfully and associated with ${createdFiles.length} task(s)`,
+        data: {
+          id: primaryRecord.id,
+          filename: primaryRecord.filename,
+          file_path: primaryRecord.file_path,
+          file_size: primaryRecord.file_size,
+          mime_type: primaryRecord.mime_type,
+          file_extension: primaryRecord.file_extension,
+          task_id: primaryRecord.task_id,
+          project_id: primaryRecord.project_id,
+          created_at: primaryRecord.created_at,
+          // Additional info about multiple associations
+          total_associations: createdFiles.length,
+          associated_task_ids: createdFiles
+            .map((f) => f.task_id)
+            .filter(Boolean),
+        },
+      });
+    } catch (error) {
+      console.error("File upload error:", error);
+
+      if (req.file && req.file.path) {
+        try {
+          await fs.remove(req.file.path);
+          console.log(`Cleaned up failed upload: ${req.file.path}`);
+        } catch (cleanupError) {
+          console.error("Failed to cleanup uploaded file:", cleanupError);
+        }
+      }
+
+      res.status(500).json({
+        success: false,
+        error: "File upload failed",
+        message: "An error occurred while processing your file upload",
+      });
+    }
+  }
+);
+
+// POST /api/files/multiple - Upload multiple files at once
+app.post(
+  "/api/files/multiple",
+  verifyToken,
+  upload.array("files", 10),
+  handleUploadErrors,
+  async (req, res) => {
+    try {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "No files provided",
+          message: "Please select at least one file to upload",
+        });
+      }
+
+      const { task_id, project_id } = req.body;
+      const uploadedFiles = [];
+      const failedFiles = [];
+
+      console.log(
+        `Processing ${req.files.length} files for user ${req.user.userId}`
+      );
+
+      // Validate associations once if provided
+      if (task_id) {
+        const taskExists = await db.query(
+          "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+          [parseInt(task_id), req.user.userId]
+        );
+
+        if (taskExists.rows.length === 0) {
+          // Clean up all uploaded files
+          for (const file of req.files) {
+            await fs.remove(file.path);
+          }
+          return res.status(404).json({
+            success: false,
+            error: "Task not found or access denied",
+          });
+        }
+      }
+
+      // Process each file individually
+      for (const file of req.files) {
+        try {
+          const fileHash = await calculateFileHash(file.path);
+
+          const fileRecord = await db.query(
+            `INSERT INTO files (
+            filename, stored_filename, file_path, file_size, mime_type, 
+            file_extension, upload_hash, user_id, task_id, project_id, is_validated
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+          RETURNING id, filename, file_size, mime_type, created_at`,
+            [
+              file.originalname,
+              file.filename,
+              file.path,
+              file.size,
+              file.mimetype,
+              path.extname(file.originalname).toLowerCase(),
+              fileHash,
+              req.user.userId,
+              task_id ? parseInt(task_id) : null,
+              project_id ? parseInt(project_id) : null,
+              true,
+            ]
+          );
+
+          uploadedFiles.push(fileRecord.rows[0]);
+          console.log(`Successfully processed: ${file.originalname}`);
+        } catch (error) {
+          console.error(`Failed to process file ${file.originalname}:`, error);
+          failedFiles.push({
+            filename: file.originalname,
+            error: "Database insertion failed",
+          });
+
+          // Clean up this specific file
+          try {
+            await fs.remove(file.path);
+          } catch (cleanupError) {
+            console.error(`Failed to cleanup ${file.path}:`, cleanupError);
+          }
+        }
+      }
+
+      // Return response with results
+      const response = {
+        success: uploadedFiles.length > 0,
+        message: `${uploadedFiles.length} of ${req.files.length} files uploaded successfully`,
+        data: {
+          uploaded: uploadedFiles,
+          failed: failedFiles,
+          total_attempted: req.files.length,
+          successful_count: uploadedFiles.length,
+          failed_count: failedFiles.length,
+        },
+      };
+
+      const statusCode = failedFiles.length > 0 ? 207 : 201; // 207 = Multi-Status
+      res.status(statusCode).json(response);
+    } catch (error) {
+      console.error("Multiple file upload error:", error);
+
+      // Clean up all uploaded files on complete failure
+      if (req.files) {
+        for (const file of req.files) {
+          try {
+            await fs.remove(file.path);
+          } catch (cleanupError) {
+            console.error(`Failed to cleanup ${file.path}:`, cleanupError);
+          }
+        }
+      }
+
+      res.status(500).json({
+        success: false,
+        error: "Multiple file upload failed",
+        message: "An error occurred while processing your file uploads",
+      });
+    }
+  }
+);
+
+// GET /api/files - List files for authenticated user with optional filtering
+app.get("/api/files", verifyToken, async (req, res) => {
+  try {
+    const { task_id, project_id, limit = 50, offset = 0 } = req.query;
+
+    let query = `
+      SELECT 
+        f.id,
+        f.filename,
+        f.file_size,
+        f.mime_type,
+        f.file_extension,
+        f.created_at,
+        f.updated_at,
+        f.task_id,
+        f.project_id,
+        t.title as task_title,
+        p.name as project_name
+      FROM files f
+      LEFT JOIN tasks t ON f.task_id = t.id
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE f.user_id = $1 AND f.deleted_at IS NULL
+    `;
+
+    const params = [req.user.userId];
+    let paramIndex = 2;
+
+    // Add filters if provided
+    if (task_id) {
+      query += ` AND f.task_id = $${paramIndex}`;
+      params.push(parseInt(task_id));
+      paramIndex++;
+    }
+
+    if (project_id) {
+      query += ` AND f.project_id = $${paramIndex}`;
+      params.push(parseInt(project_id));
+      paramIndex++;
+    }
+
+    query += ` ORDER BY f.created_at DESC LIMIT $${paramIndex} OFFSET $${
+      paramIndex + 1
+    }`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await db.query(query, params);
+
+    // Get total count for pagination - this needs to match the main query filters exactly
+    let countQuery = `
+  SELECT COUNT(*) as total
+  FROM files f  
+  WHERE f.user_id = $1 AND f.deleted_at IS NULL
+`;
+    const countParams = [req.user.userId];
+    let countParamIndex = 2;
+
+    // Apply the same filters to the count query as the main query
+    if (task_id) {
+      countQuery += ` AND f.task_id = $${countParamIndex}`;
+      countParams.push(parseInt(task_id));
+      countParamIndex++;
+    }
+
+    if (project_id) {
+      countQuery += ` AND f.project_id = $${countParamIndex}`;
+      countParams.push(parseInt(project_id));
+      countParamIndex++;
+    }
+    const countResult = await db.query(countQuery, countParams);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      pagination: {
+        total: parseInt(countResult.rows[0].total),
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        has_more:
+          parseInt(offset) + result.rows.length <
+          parseInt(countResult.rows[0].total),
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching files:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch files",
+    });
+  }
+});
+
+// GET /api/files/:id/download - Download a file
+app.get("/api/files/:id/download", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Get file information from database
+    const result = await db.query(
+      `SELECT filename, stored_filename, file_path, mime_type, file_size, upload_hash
+       FROM files 
+       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+      [fileId, req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or access denied",
+      });
+    }
+
+    const fileInfo = result.rows[0];
+    const filePath = path.resolve(fileInfo.file_path);
+
+    // Verify file still exists on disk
+    const fileExists = await fs.pathExists(filePath);
+    if (!fileExists) {
+      console.error(`File missing from disk: ${filePath}`);
+      console.error(`File missing: ${filePath}`);
+      console.error(`Stored path: ${fileInfo.file_path}`);
+      console.error(`Resolved path: ${filePath}`);
+      return res.status(404).json({
+        success: false,
+        error: "File not found on server",
+      });
+    }
+
+    // Optional: Verify file integrity
+    try {
+      const currentHash = await calculateFileHash(filePath);
+      if (currentHash !== fileInfo.upload_hash) {
+        console.error(`File integrity check failed for ${filePath}`);
+        return res.status(500).json({
+          success: false,
+          error: "File integrity verification failed",
+        });
+      }
+    } catch (hashError) {
+      console.warn(
+        `Could not verify file integrity for ${filePath}:`,
+        hashError
+      );
+      // Continue with download - hash verification is optional
+    }
+
+    // Set appropriate headers for download
+    res.setHeader("Content-Type", fileInfo.mime_type);
+    res.setHeader("Content-Length", fileInfo.file_size);
+
+    // Safely encode filename for Content-Disposition header
+    // This handles special characters and prevents header injection attacks
+    const safeFilename = fileInfo.filename.replace(/[^\w\-_.]/g, "_");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${safeFilename}"`
+    );
+
+    // Add cache control headers for better performance
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader(
+      "Last-Modified",
+      new Date(fileInfo.updated_at || fileInfo.created_at).toUTCString()
+    );
+
+    // Stream the file to the client
+    // Using streams is memory-efficient for large files
+    const fileStream = fs.createReadStream(filePath);
+
+    // Handle stream errors gracefully
+    fileStream.on("error", (streamError) => {
+      console.error(`Stream error for file ${filePath}:`, streamError);
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: "Error reading file",
+        });
+      }
+    });
+
+    // Pipe the file stream directly to the response
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error("Error downloading file:", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to download file",
+      });
+    }
+  }
+});
+
+// PUT /api/files/:id - Update file metadata (rename or change associations)
+app.put("/api/files/:id", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+    const { filename, task_id, project_id } = req.body;
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Verify file exists and user owns it
+    const existingFile = await db.query(
+      "SELECT id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+      [fileId, req.user.userId]
+    );
+
+    if (existingFile.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or access denied",
+      });
+    }
+
+    // Build dynamic update query based on provided fields
+    let updateFields = [];
+    let updateValues = [];
+    let valueIndex = 1;
+
+    if (filename && filename.trim()) {
+      updateFields.push(`filename = $${valueIndex++}`);
+      updateValues.push(filename.trim());
+    }
+
+    if (task_id !== undefined) {
+      // Verify task exists and user owns it if task_id is not null
+      if (task_id !== null) {
+        const taskCheck = await db.query(
+          "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+          [task_id, req.user.userId]
+        );
+
+        if (taskCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid task ID or access denied",
+          });
+        }
+      }
+      updateFields.push(`task_id = $${valueIndex++}`);
+      updateValues.push(task_id);
+    }
+
+    if (project_id !== undefined) {
+      // Verify project exists and user owns it if project_id is not null
+      if (project_id !== null) {
+        const projectCheck = await db.query(
+          "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+          [project_id, req.user.userId]
+        );
+        if (projectCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid project ID or access denied",
+          });
+        }
+      }
+      updateFields.push(`project_id = $${valueIndex++}`);
+      updateValues.push(project_id);
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No valid fields provided for update",
+      });
+    }
+
+    // Add updated_at and file ID to the query
+    updateFields.push(`updated_at = $${valueIndex++}`);
+    updateValues.push(new Date());
+    updateValues.push(fileId);
+
+    const updateQuery = `
+      UPDATE files 
+      SET ${updateFields.join(", ")}
+      WHERE id = $${valueIndex}
+      RETURNING id, filename, task_id, project_id, updated_at
+    `;
+
+    const result = await db.query(updateQuery, updateValues);
+
+    res.json({
+      success: true,
+      message: "File updated successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error updating file:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to update file",
+    });
+  }
+});
+
+// DELETE /api/files/:id - Soft delete a file
+app.delete("/api/files/:id", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Verify file exists and user owns it
+    const result = await db.query(
+      `UPDATE files 
+       SET deleted_at = $1, updated_at = $1
+       WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL
+       RETURNING id, filename`,
+      [new Date(), fileId, req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or already deleted",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "File deleted successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error deleting file:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete file",
+    });
+  }
+});
+
+// POST /api/files/:id/  - Restore a soft-deleted file
+app.post("/api/files/:id/restore", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Restore the file by setting deleted_at to NULL
+    const result = await db.query(
+      `UPDATE files 
+       SET deleted_at = NULL, updated_at = $1
+       WHERE id = $2 AND user_id = $3 AND deleted_at IS NOT NULL
+       RETURNING id, filename, created_at`,
+      [new Date(), fileId, req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or not deleted",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "File restored successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error restoring file:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to restore file",
+    });
+  }
+});
+
+// GET /api/files/deleted - List soft-deleted files
+app.get("/api/files/deleted", verifyToken, async (req, res) => {
+  try {
+    const result = await db.query(
+      `
+      SELECT 
+        f.id,
+        f.filename,
+        f.file_size,
+        f.mime_type,
+        f.created_at,
+        f.deleted_at,
+        f.task_id,
+        f.project_id,
+        t.title as task_title,
+        p.name as project_name
+      FROM files f
+      LEFT JOIN tasks t ON f.task_id = t.id
+      LEFT JOIN projects p ON f.project_id = p.id
+      WHERE f.user_id = $1 AND f.deleted_at IS NOT NULL
+      ORDER BY f.deleted_at DESC
+      `,
+      [req.user.userId]
+    );
+
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+    });
+  } catch (error) {
+    console.error("Error fetching deleted files:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch deleted files",
+    });
+  }
+});
+
+// GET /api/projects/:id/files - Get all files for a specific project
+// This endpoint follows RESTful conventions: /resource/:id/sub-resource
+app.get("/api/projects/:id/files", verifyToken, async (req, res) => {
+  try {
+    const projectId = parseInt(req.params.id);
+    const userId = req.user.userId;
+
+    // Extract pagination and filtering options from query parameters
+    const {
+      limit = 50,
+      offset = 0,
+      include_deleted = false, // Option to include soft-deleted files
+    } = req.query;
+
+    // Validate the project ID parameter
+    if (!projectId || isNaN(projectId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid project ID provided",
+      });
+    }
+
+    // First, verify the project exists and the user has access to it
+    // This is crucial for security - we don't want users accessing files
+    // from projects they don't own
+    const projectCheck = await db.query(
+      "SELECT id, name FROM projects WHERE id = $1 AND user_id = $2",
+      [projectId, userId]
+    );
+
+    if (projectCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found or access denied",
+        message:
+          "The requested project doesn't exist or you don't have permission to view it",
+      });
+    }
+
+    const projectInfo = projectCheck.rows[0];
+
+    // Build the main query to fetch files for this project
+    let filesQuery = `
+      SELECT 
+        f.id,
+        f.filename,
+        f.file_size,
+        f.mime_type,
+        f.file_extension,
+        f.created_at,
+        f.updated_at,
+        f.deleted_at,
+        f.task_id,
+        t.title as task_title,
+        t.completed as task_completed
+      FROM files f
+      LEFT JOIN tasks t ON f.task_id = t.id AND t.project_id = $1
+      WHERE f.project_id = $1 AND f.user_id = $2
+    `;
+
+    const queryParams = [projectId, userId];
+    let paramIndex = 3;
+
+    // Add deletion filter based on include_deleted parameter
+    if (include_deleted !== "true") {
+      filesQuery += ` AND f.deleted_at IS NULL`;
+    }
+
+    // Add pagination
+    filesQuery += ` ORDER BY f.created_at DESC LIMIT $${paramIndex} OFFSET $${
+      paramIndex + 1
+    }`;
+    queryParams.push(parseInt(limit), parseInt(offset));
+
+    // Execute the main query
+    const filesResult = await db.query(filesQuery, queryParams);
+
+    // Get total count for pagination metadata
+    let countQuery = `
+      SELECT COUNT(*) as total
+      FROM files f  
+      WHERE f.project_id = $1 AND f.user_id = $2
+    `;
+
+    const countParams = [projectId, userId];
+
+    if (include_deleted !== "true") {
+      countQuery += ` AND f.deleted_at IS NULL`;
+    }
+
+    const countResult = await db.query(countQuery, countParams);
+    const totalFiles = parseInt(countResult.rows[0].total);
+
+    // Calculate some useful statistics for the project
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total_files,
+        COUNT(CASE WHEN deleted_at IS NULL THEN 1 END) as active_files,
+        COUNT(CASE WHEN deleted_at IS NOT NULL THEN 1 END) as deleted_files,
+        SUM(CASE WHEN deleted_at IS NULL THEN file_size ELSE 0 END) as total_size_bytes,
+        COUNT(DISTINCT task_id) as tasks_with_files
+      FROM files 
+      WHERE project_id = $1 AND user_id = $2
+    `;
+
+    const statsResult = await db.query(statsQuery, [projectId, userId]);
+    const stats = statsResult.rows[0];
+
+    // Format the response with comprehensive information
+    const response = {
+      success: true,
+      message: `Retrieved files for project: ${projectInfo.name}`,
+      data: {
+        project: {
+          id: projectInfo.id,
+          name: projectInfo.name,
+        },
+        files: filesResult.rows,
+        statistics: {
+          total_files: parseInt(stats.total_files),
+          active_files: parseInt(stats.active_files),
+          deleted_files: parseInt(stats.deleted_files),
+          total_size_bytes: parseInt(stats.total_size_bytes || 0),
+          total_size_mb:
+            Math.round(((stats.total_size_bytes || 0) / (1024 * 1024)) * 100) /
+            100,
+          tasks_with_files: parseInt(stats.tasks_with_files),
+        },
+        pagination: {
+          total: totalFiles,
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          current_page: Math.floor(parseInt(offset) / parseInt(limit)) + 1,
+          total_pages: Math.ceil(totalFiles / parseInt(limit)),
+          has_more: parseInt(offset) + filesResult.rows.length < totalFiles,
+          has_previous: parseInt(offset) > 0,
+        },
+      },
+    };
+
+    // Log successful access for monitoring purposes
+    console.log(
+      `Files retrieved for project ${projectId} (${projectInfo.name}): ${filesResult.rows.length} files returned`
+    );
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error fetching project files:", error);
+
+    // Provide different error messages based on the type of error
+    if (error.code === "22P02") {
+      // Invalid input syntax for integer
+      return res.status(400).json({
+        success: false,
+        error: "Invalid project ID format",
+        message: "Project ID must be a valid number",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch project files",
+      message: "An internal server error occurred while retrieving the files",
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
-
-// Export the middleware so you can use it in other routes
-module.exports = { verifyToken };
