@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useAuth } from "./authentication_provider_component";
+import { useAuth } from "./hooks/use_auth";
 // User Profile Component
 const UserProfile = () => {
   const { user, logout, getProfile } = useAuth();

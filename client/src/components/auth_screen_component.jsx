@@ -18,7 +18,11 @@ const AuthScreen = () => {
           {isLogin ? (
             <LoginForm onSwitchToRegister={() => setIsLogin(false)} />
           ) : (
-            <RegisterForm onSwitchToLogin={() => setIsLogin(true)} />
+            <RegisterForm
+              onSwitchToLogin={() => {
+                setIsLogin(true);
+              }}
+            />
           )}
         </Col>
       </Row>

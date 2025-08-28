@@ -9,7 +9,7 @@ import {
   Row,
   Spinner,
 } from "react-bootstrap";
-import { useAuth } from "./authentication_provider_component";
+import { useAuth } from "./hooks/use_auth";
 
 function TaskEditForm({ taskId, onTaskUpdated, onCancel }) {
   const { token } = useAuth();

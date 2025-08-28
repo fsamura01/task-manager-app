@@ -1,9 +1,10 @@
 import { Button, Container, Nav, Navbar } from "react-bootstrap";
-import { useAuth } from "./authentication_provider_component";
+import { useAuth } from "./hooks/use_auth";
 
 // Navigation Component
 const AppNavbar = () => {
   const { user, logout } = useAuth();
+  console.log("🚀 ~ AppNavbar ~ logout:", logout);
   return (
     <Navbar bg="primary" variant="dark" expand="lg" className="mb-4">
       <Container>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Alert, Button, Card, Container, Form, Spinner } from "react-bootstrap";
-import { useAuth } from "./authentication_provider_component";
+import { useAuth } from "./hooks/use_auth";
 
 // Login Component
 const LoginForm = ({ onSwitchToRegister }) => {
@@ -25,7 +25,6 @@ const LoginForm = ({ onSwitchToRegister }) => {
     setLoading(true);
 
     const result = await login(formData.username, formData.password);
-    console.log("🚀 ~ handleSubmit ~ result:", result);
 
     if (!result.success) {
       setError(

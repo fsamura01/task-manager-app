@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Alert, Button, Card, Col, Form, Row, Spinner } from "react-bootstrap";
-import { useAuth } from "./authentication_provider_component";
+import { useAuth } from "./hooks/use_auth";
 
 // Enhanced Task Creation Form Component with Smart Button States
 const TaskCreationForm = ({ onTaskCreated, projectId }) => {
