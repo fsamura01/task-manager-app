@@ -5,7 +5,19 @@ const db = require("./database");
 const fs = require("fs-extra");
 const path = require("path");
 const calculateFileHash = require("./utils/calculate-filehash");
-const { upload, handleUploadErrors } = require("./middleware/upload");
+/* Local file storage
+const { upload, handleUploadErrors } = require("./middleware/upload"); 
+*/
+
+/* External files storage
+Replace your existing file upload endpoints with these S3-compatible versions 
+*/
+const {
+  upload,
+  handleUploadErrors,
+  generatePresignedUrl,
+  deleteFromS3,
+} = require("./middleware/s3upload");
 const verifyToken = require("./middleware/verifytoken");
 const {
   loginLimiter,
@@ -1179,7 +1191,8 @@ app.post("/api/tasks", verifyToken, async (req, res) => {
 
 /**POST /api/files - Upload single file (can be associated with task/project or standalone)
 Updated POST /api/files endpoint to handle multiple task associations**/
-app.post(
+// File upload end point for local and database storage
+/* app.post(
   "/api/files",
   verifyToken,
   upload.single("file"),
@@ -1255,9 +1268,9 @@ app.post(
       if (taskIdsToProcess.length === 0) {
         const fileRecord = await db.query(
           `INSERT INTO files (
-            filename, stored_filename, file_path, file_size, mime_type, 
+            filename, stored_filename, file_path, file_size, mime_type,
             file_extension, upload_hash, user_id, task_id, project_id, is_validated
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           RETURNING *`,
           [
             req.file.originalname,
@@ -1279,9 +1292,9 @@ app.post(
         for (const taskId of taskIdsToProcess) {
           const fileRecord = await db.query(
             `INSERT INTO files (
-              filename, stored_filename, file_path, file_size, mime_type, 
+              filename, stored_filename, file_path, file_size, mime_type,
               file_extension, upload_hash, user_id, task_id, project_id, is_validated
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *`,
             [
               req.file.originalname,
@@ -1347,9 +1360,603 @@ app.post(
       });
     }
   }
-);
+); */
 
 // POST /api/files/multiple - Upload multiple files at once
+
+// File upload for s3Upload
+// POST /api/files - Upload single file to S3
+/* app.post(
+  "/api/files",
+  verifyToken,
+  upload.single("file"),
+  handleUploadErrors,
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          error: "No file provided",
+          message: "Please select a file to upload",
+        });
+      }
+
+      const { task_id, task_ids, project_id, description } = req.body;
+
+      console.log(
+        `Processing S3 upload for user ${req.user.userId}: ${req.file.originalname}`
+      );
+
+      // Handle task IDs validation (same as before)
+      let taskIdsToProcess = [];
+      if (task_id) {
+        taskIdsToProcess = [parseInt(task_id)];
+      } else if (task_ids) {
+        if (Array.isArray(task_ids)) {
+          taskIdsToProcess = task_ids.map((id) => parseInt(id));
+        } else if (typeof task_ids === "string") {
+          taskIdsToProcess = task_ids
+            .split(",")
+            .map((id) => parseInt(id.trim()));
+        }
+      }
+
+      // Validate tasks and project (same validation logic)
+      if (taskIdsToProcess.length > 0) {
+        const taskCheck = await db.query(
+          "SELECT id FROM tasks WHERE id = ANY($1) AND user_id = $2",
+          [taskIdsToProcess, req.user.userId]
+        );
+
+        if (taskCheck.rows.length !== taskIdsToProcess.length) {
+          return res.status(404).json({
+            success: false,
+            error: "One or more tasks not found or access denied",
+          });
+        }
+      }
+
+      if (project_id) {
+        const projectExists = await db.query(
+          "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+          [parseInt(project_id), req.user.userId]
+        );
+
+        if (projectExists.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: "Project not found or access denied",
+          });
+        }
+      }
+
+      const createdFiles = [];
+
+      // Store file information in database with S3 details
+      if (taskIdsToProcess.length === 0) {
+        const fileRecord = await db.query(
+          `INSERT INTO files (
+            filename, stored_filename, s3_key, s3_url, file_size, mime_type, 
+            file_extension, user_id, task_id, project_id, storage_provider
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+          RETURNING *`,
+          [
+            req.file.originalname,
+            req.file.key.split("/").pop(), // Extract filename from S3 key
+            req.file.key, // S3 object key
+            req.file.location, // S3 URL
+            req.file.size,
+            req.file.mimetype,
+            path.extname(req.file.originalname).toLowerCase(),
+            req.user.userId,
+            null,
+            project_id ? parseInt(project_id) : null,
+            "s3",
+          ]
+        );
+        createdFiles.push(fileRecord.rows[0]);
+      } else {
+        // Create record for each task
+        for (const taskId of taskIdsToProcess) {
+          const fileRecord = await db.query(
+            `INSERT INTO files (
+              filename, stored_filename, s3_key, s3_url, file_size, mime_type, 
+              file_extension, user_id, task_id, project_id, storage_provider
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+            RETURNING *`,
+            [
+              req.file.originalname,
+              req.file.key.split("/").pop(),
+              req.file.key,
+              req.file.location,
+              req.file.size,
+              req.file.mimetype,
+              path.extname(req.file.originalname).toLowerCase(),
+              req.user.userId,
+              taskId,
+              project_id ? parseInt(project_id) : null,
+              "s3",
+            ]
+          );
+          createdFiles.push(fileRecord.rows[0]);
+        }
+      }
+
+      console.log(`File uploaded to S3 successfully: ${req.file.key}`);
+
+      const primaryRecord = createdFiles[0];
+
+      res.status(201).json({
+        success: true,
+        message: `File uploaded successfully to S3 and associated with ${createdFiles.length} task(s)`,
+        data: {
+          id: primaryRecord.id,
+          filename: primaryRecord.filename,
+          s3_key: primaryRecord.s3_key,
+          s3_url: primaryRecord.s3_url,
+          file_size: primaryRecord.file_size,
+          mime_type: primaryRecord.mime_type,
+          file_extension: primaryRecord.file_extension,
+          task_id: primaryRecord.task_id,
+          project_id: primaryRecord.project_id,
+          created_at: primaryRecord.created_at,
+          total_associations: createdFiles.length,
+          associated_task_ids: createdFiles
+            .map((f) => f.task_id)
+            .filter(Boolean),
+        },
+      });
+    } catch (error) {
+      console.error("S3 file upload error:", error);
+
+      res.status(500).json({
+        success: false,
+        error: "File upload failed",
+        message: "An error occurred while uploading to S3",
+      });
+    }
+  }
+); */
+
+// POST /api/files - Upload single file to S3
+// POST /api/files - Upload single file to S3
+// POST /api/files - Upload single file to S3
+app.post(
+  "/api/files",
+  verifyToken,
+  upload.single("file"),
+  handleUploadErrors,
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          error: "No file provided",
+          message: "Please select a file to upload",
+        });
+      }
+
+      const { task_id, task_ids, project_id, description } = req.body;
+
+      console.log(
+        `Processing S3 upload for user ${req.user.userId}: ${req.file.originalname}`
+      );
+
+      // Handle task IDs validation (same as before)
+      let taskIdsToProcess = [];
+      if (task_id) {
+        taskIdsToProcess = [parseInt(task_id)];
+      } else if (task_ids) {
+        if (Array.isArray(task_ids)) {
+          taskIdsToProcess = task_ids.map((id) => parseInt(id));
+        } else if (typeof task_ids === "string") {
+          taskIdsToProcess = task_ids
+            .split(",")
+            .map((id) => parseInt(id.trim()));
+        }
+      }
+
+      // Validate tasks and project (same validation logic)
+      if (taskIdsToProcess.length > 0) {
+        const taskCheck = await db.query(
+          "SELECT id FROM tasks WHERE id = ANY($1) AND user_id = $2",
+          [taskIdsToProcess, req.user.userId]
+        );
+
+        if (taskCheck.rows.length !== taskIdsToProcess.length) {
+          return res.status(404).json({
+            success: false,
+            error: "One or more tasks not found or access denied",
+          });
+        }
+      }
+
+      if (project_id) {
+        const projectExists = await db.query(
+          "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+          [parseInt(project_id), req.user.userId]
+        );
+
+        if (projectExists.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: "Project not found or access denied",
+          });
+        }
+      }
+
+      const createdFiles = [];
+
+      // Prepare file data for database insertion
+      const storedFilename = req.file.key.split("/").pop(); // Extract filename from S3 key
+      const fileExtension = path.extname(req.file.originalname).toLowerCase();
+      const filePath = req.file.key; // Use S3 key as file_path
+
+      // Generate upload hash for file validation (optional)
+      const crypto = require("crypto");
+      const uploadHash = crypto
+        .createHash("md5")
+        .update(req.file.key + Date.now())
+        .digest("hex");
+
+      // Store file information in database with correct column names matching your schema
+      if (taskIdsToProcess.length === 0) {
+        const fileRecord = await db.query(
+          `INSERT INTO files (
+            filename, stored_filename, file_path, file_size, mime_type, 
+            file_extension, upload_hash, is_validated, user_id, task_id, 
+            project_id, s3_key, s3_url, storage_provider
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
+          RETURNING *`,
+          [
+            req.file.originalname, // filename (original name)
+            storedFilename, // stored_filename (filename in S3)
+            filePath, // file_path (S3 key path)
+            req.file.size, // file_size
+            req.file.mimetype, // mime_type
+            fileExtension, // file_extension
+            uploadHash, // upload_hash
+            true, // is_validated (set to true for S3 uploads)
+            req.user.userId, // user_id
+            null, // task_id (null when no specific task)
+            project_id ? parseInt(project_id) : null, // project_id
+            req.file.key, // s3_key
+            req.file.location, // s3_url
+            "s3", // storage_provider
+          ]
+        );
+        createdFiles.push(fileRecord.rows[0]);
+      } else {
+        // Create record for each task
+        for (const taskId of taskIdsToProcess) {
+          const fileRecord = await db.query(
+            `INSERT INTO files (
+              filename, stored_filename, file_path, file_size, mime_type, 
+              file_extension, upload_hash, is_validated, user_id, task_id, 
+              project_id, s3_key, s3_url, storage_provider
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
+            RETURNING *`,
+            [
+              req.file.originalname, // filename (original name)
+              storedFilename, // stored_filename (filename in S3)
+              filePath, // file_path (S3 key path)
+              req.file.size, // file_size
+              req.file.mimetype, // mime_type
+              fileExtension, // file_extension
+              uploadHash, // upload_hash
+              true, // is_validated
+              req.user.userId, // user_id
+              taskId, // task_id
+              project_id ? parseInt(project_id) : null, // project_id
+              req.file.key, // s3_key
+              req.file.location, // s3_url
+              "s3", // storage_provider
+            ]
+          );
+          createdFiles.push(fileRecord.rows[0]);
+        }
+      }
+
+      console.log(`File uploaded to S3 successfully: ${req.file.key}`);
+
+      const primaryRecord = createdFiles[0];
+
+      res.status(201).json({
+        success: true,
+        message: `File uploaded successfully to S3 and associated with ${createdFiles.length} task(s)`,
+        data: {
+          id: primaryRecord.id,
+          filename: primaryRecord.filename,
+          stored_filename: primaryRecord.stored_filename,
+          file_path: primaryRecord.file_path,
+          s3_key: primaryRecord.s3_key,
+          s3_url: primaryRecord.s3_url,
+          file_size: primaryRecord.file_size,
+          mime_type: primaryRecord.mime_type,
+          file_extension: primaryRecord.file_extension,
+          task_id: primaryRecord.task_id,
+          project_id: primaryRecord.project_id,
+          is_validated: primaryRecord.is_validated,
+          created_at: primaryRecord.created_at,
+          total_associations: createdFiles.length,
+          associated_task_ids: createdFiles
+            .map((f) => f.task_id)
+            .filter(Boolean),
+        },
+      });
+    } catch (error) {
+      console.error("S3 file upload error:", error);
+
+      res.status(500).json({
+        success: false,
+        error: "File upload failed",
+        message: "An error occurred while uploading to S3",
+      });
+    }
+  }
+);
+
+// GET /api/files/:id/download - Generate presigned URL for secure download
+/* app.get("/api/files/:id/download", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Get file information from database
+    const result = await db.query(
+      `SELECT filename, s3_key, s3_url, mime_type, file_size, storage_provider
+       FROM files 
+       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+      [fileId, req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or access denied",
+      });
+    }
+
+    const fileInfo = result.rows[0];
+
+    // Check if file is stored in S3
+    if (fileInfo.storage_provider !== "s3" || !fileInfo.s3_key) {
+      return res.status(400).json({
+        success: false,
+        error: "File not stored in S3 or missing S3 key",
+      });
+    }
+
+    try {
+      // Generate presigned URL valid for 1 hour
+      const presignedUrl = generatePresignedUrl(fileInfo.s3_key, 3600);
+
+      res.json({
+        success: true,
+        data: {
+          download_url: presignedUrl,
+          filename: fileInfo.filename,
+          file_size: fileInfo.file_size,
+          mime_type: fileInfo.mime_type,
+          expires_in: 3600, // seconds
+        },
+      });
+    } catch (s3Error) {
+      console.error(
+        `Error generating presigned URL for ${fileInfo.s3_key}:`,
+        s3Error
+      );
+      return res.status(500).json({
+        success: false,
+        error: "Failed to generate download URL",
+      });
+    }
+  } catch (error) {
+    console.error("Error processing download request:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to process download request",
+    });
+  }
+});
+ */
+// DELETE /api/files/:id - Delete file from S3 and database
+
+// GET /api/files/:id/download - Generate presigned URL for secure download
+app.get("/api/files/:id/download", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Get file information from database
+    const result = await db.query(
+      `SELECT filename, s3_key, s3_url, mime_type, file_size, storage_provider
+       FROM files 
+       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+      [fileId, req.user.userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or access denied",
+      });
+    }
+
+    const fileInfo = result.rows[0];
+
+    // Check if file is stored in S3
+    if (fileInfo.storage_provider !== "s3" || !fileInfo.s3_key) {
+      return res.status(400).json({
+        success: false,
+        error: "File not stored in S3 or missing S3 key",
+      });
+    }
+
+    try {
+      // Generate presigned URL valid for 1 hour
+      const presignedUrl = await generatePresignedUrl(fileInfo.s3_key, 3600);
+
+      res.json({
+        success: true,
+        data: {
+          download_url: presignedUrl,
+          filename: fileInfo.filename,
+          file_size: fileInfo.file_size,
+          mime_type: fileInfo.mime_type,
+          expires_in: 3600, // seconds
+        },
+      });
+    } catch (s3Error) {
+      console.error(
+        `Error generating presigned URL for ${fileInfo.s3_key}:`,
+        s3Error
+      );
+      return res.status(500).json({
+        success: false,
+        error: "Failed to generate download URL",
+      });
+    }
+  } catch (error) {
+    console.error("Error processing download request:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to process download request",
+    });
+  }
+});
+
+// DELETE /api/files/:id - Delete file from S3 and database
+app.delete("/api/files/:id", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Get file information before deletion
+    const fileResult = await db.query(
+      "SELECT s3_key, filename, storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+      [fileId, req.user.userId]
+    );
+
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or already deleted",
+      });
+    }
+
+    const fileInfo = fileResult.rows[0];
+
+    // Delete from S3 if it's stored there
+    if (fileInfo.storage_provider === "s3" && fileInfo.s3_key) {
+      const s3DeleteSuccess = await deleteFromS3(fileInfo.s3_key);
+      if (!s3DeleteSuccess) {
+        console.warn(
+          `Failed to delete ${fileInfo.s3_key} from S3, but continuing with database deletion`
+        );
+      }
+    }
+
+    // Soft delete from database
+    const result = await db.query(
+      `UPDATE files 
+       SET deleted_at = $1, updated_at = $1
+       WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL
+       RETURNING id, filename`,
+      [new Date(), fileId, req.user.userId]
+    );
+
+    res.json({
+      success: true,
+      message: "File deleted successfully from S3 and database",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error deleting file:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete file",
+    });
+  }
+});
+
+app.delete("/api/files/:id", verifyToken, async (req, res) => {
+  try {
+    const fileId = parseInt(req.params.id);
+
+    if (!fileId || isNaN(fileId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid file ID",
+      });
+    }
+
+    // Get file information before deletion
+    const fileResult = await db.query(
+      "SELECT s3_key, filename, storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+      [fileId, req.user.userId]
+    );
+
+    if (fileResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found or already deleted",
+      });
+    }
+
+    const fileInfo = fileResult.rows[0];
+
+    // Delete from S3 if it's stored there
+    if (fileInfo.storage_provider === "s3" && fileInfo.s3_key) {
+      const s3DeleteSuccess = await deleteFromS3(fileInfo.s3_key);
+      if (!s3DeleteSuccess) {
+        console.warn(
+          `Failed to delete ${fileInfo.s3_key} from S3, but continuing with database deletion`
+        );
+      }
+    }
+
+    // Soft delete from database
+    const result = await db.query(
+      `UPDATE files 
+       SET deleted_at = $1, updated_at = $1
+       WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL
+       RETURNING id, filename`,
+      [new Date(), fileId, req.user.userId]
+    );
+
+    res.json({
+      success: true,
+      message: "File deleted successfully from S3 and database",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error deleting file:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete file",
+    });
+  }
+});
+
 app.post(
   "/api/files/multiple",
   verifyToken,

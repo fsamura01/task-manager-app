@@ -32,7 +32,6 @@ const API_BASE_URL = "http://localhost:5000/api";
 
 const ProjectsDashboard = () => {
   const [projects, setProjects] = useState([]);
-  console.log("🚀 ~ ProjectsDashboard ~ projects:", projects);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);

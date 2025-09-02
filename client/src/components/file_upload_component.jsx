@@ -131,12 +131,17 @@ const FileUploadComponent = ({
       const data = await response.json();
       const files = data.files || data || [];
 
+      // Enhanced file mapping to include S3 metadata
       const normalizedFiles = files.data.map((file) => ({
         id: file.id,
         name: file.filename || file.name,
         originalName: file.original_name || file.name,
-        size: file.size || 0,
-        type: file.content_type || file.type || "application/octet-stream",
+        size: file.file_size || file.size || 0,
+        type:
+          file.mime_type ||
+          file.content_type ||
+          file.type ||
+          "application/octet-stream",
         uploadedAt: file.uploaded_at || file.created_at,
         downloadUrl:
           file.download_url || `${API_BASE_URL}/files/${file.id}/download`,
@@ -146,6 +151,9 @@ const FileUploadComponent = ({
           taskTitle:
             tasks.find((t) => t.id === file.task_id)?.title || "Unknown Task",
           uploadedBy: file.uploaded_by,
+          storageProvider: file.storage_provider || "unknown",
+          s3Key: file.s3_key,
+          s3Url: file.s3_url,
         },
       }));
 
@@ -273,7 +281,7 @@ const FileUploadComponent = ({
         if (!isDuplicate) {
           validFiles.push({
             file,
-            id: Math.random().toString(36).substr(2, 9),
+            id: Math.random().toString(36).substring(2, 9),
             name: file.name,
             size: file.size,
             type: file.type,
@@ -499,8 +507,10 @@ const FileUploadComponent = ({
     }
   };
 
+  // Update your handleDownload function to work with presigned URLs
   const handleDownload = async (fileId, fileName) => {
     try {
+      // First, get the presigned URL from your backend
       const response = await fetch(`${API_BASE_URL}/files/${fileId}/download`, {
         method: "GET",
         headers: {
@@ -512,7 +522,20 @@ const FileUploadComponent = ({
         throw new Error(`Download failed: ${response.status}`);
       }
 
-      const blob = await response.blob();
+      const data = await response.json();
+
+      if (!data.success || !data.data.download_url) {
+        throw new Error("No download URL received");
+      }
+
+      // Use the presigned URL to download the file
+      const fileResponse = await fetch(data.data.download_url);
+
+      if (!fileResponse.ok) {
+        throw new Error(`File download failed: ${fileResponse.status}`);
+      }
+
+      const blob = await fileResponse.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -586,7 +609,6 @@ const FileUploadComponent = ({
                 {!isLoadingFiles && existingFiles.length > 0 && (
                   <ListGroup className="mb-3">
                     {existingFiles.map((file) => {
-                      console.log("🚀 ~ file:", file);
                       return (
                         <ListGroup.Item
                           key={file.id}
