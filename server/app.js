@@ -5,7 +5,8 @@ const db = require("./database");
 const fs = require("fs-extra");
 const path = require("path");
 const calculateFileHash = require("./utils/calculate-filehash");
-// const { upload, handleUploadErrors } = require("./middleware/upload");
+const http = require("http");
+const { Server } = require("socket.io");
 const {
   upload,
   handleUploadErrors,
@@ -213,6 +214,131 @@ app.get("/api/auth/profile", verifyToken, async (req, res) => {
   }
 });
 
+/* MODIFIED: Update the existing tasks endpoint to work with projects
+    Replace your existing GET /api/tasks endpoint with this version 
+    Get all tasks end-point*/
+app.get("/api/tasks", verifyToken, async (req, res) => {
+  try {
+    const { project_id } = req.query; // Allow filtering by project
+
+    let query = `
+      SELECT 
+        t.id,
+        t.title,
+        t.description,
+        t.completed,
+        t.created_at,
+        t.updated_at,
+        t.due_date,
+        t.project_id,
+        p.name as project_name,
+        u.name as user_name,
+        u.email as user_email
+      FROM tasks t
+      JOIN projects p ON t.project_id = p.id
+      JOIN users u ON t.user_id = u.id
+      WHERE t.user_id = $1
+    `;
+
+    let params = [req.user.userId];
+
+    // Add project filter if specified
+    if (project_id) {
+      query += ` AND t.project_id = $2`;
+      params.push(parseInt(project_id));
+    }
+
+    query += ` ORDER BY t.created_at DESC`;
+
+    const result = await db.query(query, params);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rows.length,
+    });
+  } catch (error) {
+    console.error("Error fetching tasks:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch tasks",
+    });
+  }
+});
+
+/* MODIFIED: Update the existing task creation endpoint to require project_id
+    Replace your existing POST /api/tasks endpoint with this version 
+    Create a task end-point*/
+app.post("/api/tasks", verifyToken, async (req, res) => {
+  try {
+    const { title, description, due_date, project_id } = req.body;
+    //const {project_id}
+
+    // Validate required fields
+    if (!title || !project_id) {
+      return res.status(400).json({
+        success: false,
+        error: "Title and project_id are required",
+      });
+    }
+
+    // Verify the project exists and belongs to the user
+    const projectCheck = await db.query(
+      "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+      [project_id, req.user.userId]
+    );
+
+    if (projectCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found or access denied",
+      });
+    }
+
+    // Create the new task
+    const result = await db.query(
+      `
+      INSERT INTO tasks (title, description, user_id, project_id, due_date)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+      `,
+      [title, description, req.user.userId, project_id, due_date]
+    );
+
+    // *** ADD THIS WEBSOCKET BROADCASTING CODE ***
+    const io = req.app.get("io");
+    if (io) {
+      const roomName = `project_${project_id}`;
+
+      // Broadcast new task creation to project room
+      io.to(roomName).emit("task_created", {
+        task: result.rows[0],
+        createdBy: {
+          id: req.user.userId,
+          username: req.user.username,
+        },
+        timestamp: new Date().toISOString(),
+        changeType: "create",
+      });
+
+      console.log(`Broadcasted new task to room: ${roomName}`);
+    }
+    // *** END OF WEBSOCKET CODE ***
+
+    res.status(201).json({
+      success: true,
+      message: "Task created successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Error creating task:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to create task",
+    });
+  }
+});
+
 // Get a specific task by ID
 app.get("/api/tasks/:id", verifyToken, async (req, res) => {
   try {
@@ -393,6 +519,7 @@ app.put("/api/tasks/:id", verifyToken, async (req, res) => {
         tasks.completed,
         tasks.created_at,
         tasks.updated_at,
+        tasks.project_id,
         tasks.due_date,
         users.name as user_name,
         users.email as user_email
@@ -402,6 +529,30 @@ app.put("/api/tasks/:id", verifyToken, async (req, res) => {
       `,
       [taskId, userId]
     );
+
+    /* Find your existing PUT /api/tasks/:id endpoint and add WebSocket broadcasting
+    Add this code right before the final res.status(200).json() response:
+
+    *** ADD THIS WEBSOCKET BROADCASTING CODE ***
+    Get the Socket.io instance and broadcast the update to project room */
+    const io = req.app.get("io");
+    if (io && updatedTaskWithUser.rows[0].project_id) {
+      const roomName = `project_${updatedTaskWithUser.rows[0].project_id}`;
+
+      // Broadcast task update to all users in the project room
+      io.to(roomName).emit("task_updated", {
+        task: updatedTaskWithUser.rows[0],
+        updatedBy: {
+          id: req.user.userId,
+          username: req.user.username,
+        },
+        timestamp: new Date().toISOString(),
+        changeType: "update",
+      });
+
+      console.log(`Broadcasted task update to room: ${roomName}`);
+    }
+    // *** END OF WEBSOCKET CODE ***
 
     console.log(
       `Task updated successfully: ID ${taskId}, Title: "${sanitizedTitle}"`
@@ -469,6 +620,27 @@ app.delete("/api/tasks/:id", verifyToken, async (req, res) => {
         message: "The task could not be deleted due to an unexpected error",
       });
     }
+
+    // *** ADD THIS WEBSOCKET BROADCASTING CODE ***
+    const io = req.app.get("io");
+    if (io && deleteResult.rows[0].project_id) {
+      const roomName = `project_${deleteResult.rows[0].project_id}`;
+
+      // Broadcast task deletion to project room
+      io.to(roomName).emit("task_deleted", {
+        taskId: taskId,
+        taskTitle: taskToDelete.title,
+        deletedBy: {
+          id: req.user.userId,
+          username: req.user.username,
+        },
+        timestamp: new Date().toISOString(),
+        changeType: "delete",
+      });
+
+      console.log(`Broadcasted task deletion to room: ${roomName}`);
+    }
+    // *** END OF WEBSOCKET CODE ***
 
     // Log the successful deletion for monitoring purposes
     console.log(
@@ -1080,109 +1252,6 @@ app.delete("/api/projects/:id", verifyToken, async (req, res) => {
   }
 });
 
-// MODIFIED: Update the existing tasks endpoint to work with projects
-// Replace your existing GET /api/tasks endpoint with this version
-app.get("/api/tasks", verifyToken, async (req, res) => {
-  try {
-    const { project_id } = req.query; // Allow filtering by project
-
-    let query = `
-      SELECT 
-        t.id,
-        t.title,
-        t.description,
-        t.completed,
-        t.created_at,
-        t.updated_at,
-        t.due_date,
-        t.project_id,
-        p.name as project_name,
-        u.name as user_name,
-        u.email as user_email
-      FROM tasks t
-      JOIN projects p ON t.project_id = p.id
-      JOIN users u ON t.user_id = u.id
-      WHERE t.user_id = $1
-    `;
-
-    let params = [req.user.userId];
-
-    // Add project filter if specified
-    if (project_id) {
-      query += ` AND t.project_id = $2`;
-      params.push(parseInt(project_id));
-    }
-
-    query += ` ORDER BY t.created_at DESC`;
-
-    const result = await db.query(query, params);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      count: result.rows.length,
-    });
-  } catch (error) {
-    console.error("Error fetching tasks:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to fetch tasks",
-    });
-  }
-});
-
-// MODIFIED: Update the existing task creation endpoint to require project_id
-// Replace your existing POST /api/tasks endpoint with this version
-app.post("/api/tasks", verifyToken, async (req, res) => {
-  try {
-    const { title, description, due_date, project_id } = req.body;
-    //const {project_id}
-
-    // Validate required fields
-    if (!title || !project_id) {
-      return res.status(400).json({
-        success: false,
-        error: "Title and project_id are required",
-      });
-    }
-
-    // Verify the project exists and belongs to the user
-    const projectCheck = await db.query(
-      "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
-      [project_id, req.user.userId]
-    );
-
-    if (projectCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "Project not found or access denied",
-      });
-    }
-
-    // Create the new task
-    const result = await db.query(
-      `
-      INSERT INTO tasks (title, description, user_id, project_id, due_date)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-      `,
-      [title, description, req.user.userId, project_id, due_date]
-    );
-
-    res.status(201).json({
-      success: true,
-      message: "Task created successfully",
-      data: result.rows[0],
-    });
-  } catch (error) {
-    console.error("Error creating task:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to create task",
-    });
-  }
-});
-
 /* Replace your existing file upload endpoints with these S3 - compatible versions
  POST /api/files - Upload single file to S3 */
 app.post(
@@ -1489,6 +1558,7 @@ app.delete("/api/files/:id", verifyToken, async (req, res) => {
     });
   }
 });
+
 // POST /api/files/multiple - Upload multiple files at once
 app.post(
   "/api/files/multiple",
@@ -2211,6 +2281,198 @@ app.get("/api/projects/:id/files", verifyToken, async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+/* app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+});
+ */
+
+// Create HTTP server and integrate Socket.io
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://127.0.0.1:5500",
+    ],
+    methods: ["GET", "POST"],
+  },
+});
+
+app.set("io", io);
+
+// Add this after your Socket.io server setup but before the connection handler
+
+// Middleware to authenticate Socket.io connections
+io.use(async (socket, next) => {
+  try {
+    // Get the token from the client connection
+    const token = socket.handshake.auth.token;
+
+    if (!token) {
+      return next(new Error("Authentication token required"));
+    }
+
+    // Verify the token (reusing your existing JWT verification logic)
+    const jwt = require("jsonwebtoken");
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Get user details from database
+    const user = await db.query(
+      "SELECT id, username, email, name FROM users WHERE id = $1",
+      [decoded.userId]
+    );
+
+    if (user.rows.length === 0) {
+      return next(new Error("User not found"));
+    }
+
+    // Attach user info to socket object
+    socket.user = {
+      id: decoded.userId,
+      username: decoded.username,
+      ...user.rows[0],
+    };
+
+    console.log(
+      `Authenticated WebSocket connection for user: ${socket.user.username}`
+    );
+    next();
+  } catch (error) {
+    console.error("WebSocket authentication error:", error);
+    next(new Error("Invalid authentication token"));
+  }
+});
+
+// Basic connection handling - we'll expand this
+// Replace your basic connection handler with this enhanced version:
+// Add this enhanced error handling to your io.on('connection') handler:
+
+io.on("connection", (socket) => {
+  console.log(
+    `User ${socket.user.username} connected with socket ID: ${socket.id}`
+  );
+
+  // Enhanced join_project with better error handling
+  socket.on("join_project", async (projectId) => {
+    try {
+      // Validate input
+      if (!projectId || isNaN(projectId)) {
+        socket.emit("error", { message: "Invalid project ID" });
+        return;
+      }
+
+      // Leave current project if user is switching projects
+      if (socket.currentProject) {
+        socket.leave(socket.currentProject.room);
+        console.log(
+          `User ${socket.user.username} left project: ${socket.currentProject.name}`
+        );
+      }
+
+      // Verify user has access to this project
+      const projectAccess = await db.query(
+        "SELECT id, name FROM projects WHERE id = $1 AND user_id = $2",
+        [projectId, socket.user.id]
+      );
+
+      if (projectAccess.rows.length === 0) {
+        socket.emit("error", {
+          message: "Project not found or access denied",
+          code: "PROJECT_ACCESS_DENIED",
+        });
+        return;
+      }
+
+      // Join the project room
+      const roomName = `project_${projectId}`;
+      socket.join(roomName);
+
+      // Store current project on socket for cleanup
+      socket.currentProject = {
+        id: projectId,
+        name: projectAccess.rows[0].name,
+        room: roomName,
+      };
+
+      console.log(
+        `User ${socket.user.username} joined project: ${projectAccess.rows[0].name}`
+      );
+
+      // Notify user they successfully joined
+      socket.emit("joined_project", {
+        projectId: projectId,
+        projectName: projectAccess.rows[0].name,
+      });
+
+      // Optionally, notify other users in the project that someone joined
+      socket.to(roomName).emit("user_joined_project", {
+        user: {
+          id: socket.user.id,
+          username: socket.user.username,
+        },
+        projectId: projectId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Error in join_project:", error);
+      socket.emit("error", {
+        message: "Failed to join project",
+        code: "JOIN_PROJECT_ERROR",
+      });
+    }
+  });
+
+  // Enhanced leave_project
+  socket.on("leave_project", () => {
+    if (socket.currentProject) {
+      const roomName = socket.currentProject.room;
+
+      // Notify others that user left
+      socket.to(roomName).emit("user_left_project", {
+        user: {
+          id: socket.user.id,
+          username: socket.user.username,
+        },
+        projectId: socket.currentProject.id,
+        timestamp: new Date().toISOString(),
+      });
+
+      socket.leave(roomName);
+      console.log(
+        `User ${socket.user.username} left project: ${socket.currentProject.name}`
+      );
+
+      socket.currentProject = null;
+      socket.emit("left_project", { message: "Successfully left project" });
+    }
+  });
+
+  // Handle disconnection with cleanup
+  socket.on("disconnect", (reason) => {
+    if (socket.currentProject) {
+      // Notify others in project that user disconnected
+      socket.to(socket.currentProject.room).emit("user_left_project", {
+        user: {
+          id: socket.user.id,
+          username: socket.user.username,
+        },
+        projectId: socket.currentProject.id,
+        timestamp: new Date().toISOString(),
+        reason: "disconnected",
+      });
+    }
+    console.log(`User ${socket.user.username} disconnected (${reason})`);
+  });
+
+  // Handle any WebSocket errors
+  socket.on("error", (error) => {
+    console.error(`Socket error for user ${socket.user.username}:`, error);
+  });
+});
+
+// Start the server
+server.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+  console.log("WebSocket server is ready");
 });

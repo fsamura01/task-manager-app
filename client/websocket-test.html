@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>WebSocket Test Client</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Task Manager WebSocket Test</h1>
+    
+    <div>
+        <h3>Connection Status: <span id="status">Disconnected</span></h3>
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+    </div>
+
+    <div>
+        <h3>Project Controls</h3>
+        <input type="number" id="projectId" placeholder="Project ID" value="1">
+        <button onclick="joinProject()">Join Project</button>
+        <button onclick="leaveProject()">Leave Project</button>
+    </div>
+
+    <div>
+        <h3>Real-time Updates</h3>
+        <div id="updates" style="border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: scroll;">
+            <!-- Updates will appear here -->
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+        const updatesDiv = document.getElementById('updates');
+        const statusSpan = document.getElementById('status');
+
+        function addUpdate(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            updatesDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            updatesDiv.scrollTop = updatesDiv.scrollHeight;
+        }
+
+        function connect() {
+            // You'll need to replace 'YOUR_JWT_TOKEN' with an actual token from your login
+            const token = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjcsInVzZXJuYW1lIjoidGVzdHVzZXIiLCJpYXQiOjE3NTcwOTY1OTIsImV4cCI6MTc1NzE4Mjk5Mn0.9VpWdh5_0akZyU92TM35KcUQIYqD8Y4_avdWZDIrxjc`; // Get this from your login endpoint
+            
+            socket = io('http://localhost:5000', {
+                auth: {
+                    token: token
+                }
+            });
+
+            socket.on('connect', () => {
+                statusSpan.textContent = 'Connected';
+                statusSpan.style.color = 'green';
+                addUpdate('Connected to server');
+            });
+
+            socket.on('disconnect', () => {
+                statusSpan.textContent = 'Disconnected';
+                statusSpan.style.color = 'red';
+                addUpdate('Disconnected from server');
+            });
+
+            socket.on('joined_project', (data) => {
+                addUpdate(`✅ Joined project: ${data.projectName} (ID: ${data.projectId})`);
+            });
+
+            socket.on('task_created', (data) => {
+                addUpdate(`🆕 New task: "${data.task.title}" by ${data.createdBy.username}`);
+            });
+
+            socket.on('task_updated', (data) => {
+                addUpdate(`✏️ Task updated: "${data.task.title}" by ${data.updatedBy.username}`);
+            });
+
+            socket.on('task_deleted', (data) => {
+                addUpdate(`🗑️ Task deleted: "${data.taskTitle}" by ${data.deletedBy.username}`);
+            });
+
+            socket.on('error', (data) => {
+                addUpdate(`❌ Error: ${data.message}`);
+            });
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+            }
+        }
+
+        function joinProject() {
+            const projectId = document.getElementById('projectId').value;
+            if (socket && projectId) {
+                socket.emit('join_project', parseInt(projectId));
+            } else {
+                addUpdate('Please connect first and enter a project ID');
+            }
+        }
+
+        function leaveProject() {
+            if (socket) {
+                socket.emit('leave_project');
+                addUpdate('Left current project');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -4,6 +4,9 @@ import {
   FileText,
   FolderOpen,
   Upload,
+  Users,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -19,26 +22,19 @@ import {
   Spinner,
   Tab,
   Tabs,
+  Toast,
+  ToastContainer,
 } from "react-bootstrap";
 import { useNavigate, useParams } from "react-router-dom";
 
 import FileUploadComponent from "./file_upload_component.jsx";
 import { useAuth } from "./hooks/use_auth";
+import { useWebSocket } from "./hooks/use_websocket"; // Import the WebSocket hook
 import TaskCreationForm from "./task_creation_form_component.jsx";
 import TaskEditForm from "./task_edit_form_component.jsx";
 
 const API_BASE_URL = `http://localhost:5000/api`;
 
-/**
- * Enhanced TasksDashboard Component with project scoping
- *
- * This component handles task management within the context of a specific project.
- * It demonstrates several key React patterns:
- * - URL parameter extraction for project scoping
- * - Conditional rendering based on project context
- * - Breadcrumb navigation for user orientation
- * - Optimistic UI updates for better user experience
- */
 const TasksDashboard = () => {
   // Core task management state
   const [tasks, setTasks] = useState([]);
@@ -46,26 +42,114 @@ const TasksDashboard = () => {
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(null);
 
-  // Project context state - helps provide navigation context
+  // Project context state
   const [projectInfo, setProjectInfo] = useState(null);
   const [projectLoading, setProjectLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("tasks");
   const [projectFiles, setProjectFiles] = useState([]);
-  // eslint-disable-next-line no-unused-vars
   const [successMessage, setSuccessMessage] = useState("");
 
+  // Real-time notifications
+  const [notifications, setNotifications] = useState([]);
+  const [activeUsers, setActiveUsers] = useState(new Set());
+
   const { token } = useAuth();
-
-  // Extract projectId from URL parameters - this is how we know which project we're viewing
   const { projectId } = useParams();
-
-  // Navigation function to go back to projects
   const navigate = useNavigate();
 
-  /**
-   * Fetch project information to provide context
-   * This helps users understand which project they're working in
-   */
+  // Initialize WebSocket connection
+  const {
+    isConnected,
+    connectionError,
+    //currentProject,
+    setOnTaskCreated,
+    setOnTaskUpdated,
+    setOnTaskDeleted,
+    setOnUserJoined,
+    setOnUserLeft,
+  } = useWebSocket(token, projectId);
+
+  // Set up WebSocket event handlers
+  useEffect(() => {
+    // Handle real-time task creation
+    setOnTaskCreated((data) => {
+      setTasks((prevTasks) => {
+        console.log("🚀 ~ TasksDashboard ~ prevTasks:", prevTasks);
+        // Check if task already exists to prevent duplicates
+        const exists = prevTasks.some((task) => task.id === data.task.id);
+        if (!exists) {
+          addNotification(
+            `New task created: "${data.task.title}" by ${data.createdBy.username}`,
+            "success"
+          );
+          return [data.task, ...prevTasks];
+        }
+        return prevTasks;
+      });
+    });
+
+    // Handle real-time task updates
+    setOnTaskUpdated((data) => {
+      setTasks((prevTasks) =>
+        prevTasks.map((task) => (task.id === data.task.id ? data.task : task))
+      );
+      addNotification(
+        `Task updated: "${data.task.title}" by ${data.updatedBy.username}`,
+        "info"
+      );
+    });
+
+    // Handle real-time task deletion
+    setOnTaskDeleted((data) => {
+      setTasks((prevTasks) =>
+        prevTasks.filter((task) => task.id !== data.taskId)
+      );
+      addNotification(
+        `Task deleted: "${data.taskTitle}" by ${data.deletedBy.username}`,
+        "warning"
+      );
+    });
+
+    // Handle user joining project
+    setOnUserJoined((data) => {
+      setActiveUsers((prev) => new Set(prev).add(data.user.username));
+      addNotification(`${data.user.username} joined the project`, "info");
+    });
+
+    // Handle user leaving project
+    setOnUserLeft((data) => {
+      setActiveUsers((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(data.user.username);
+        return newSet;
+      });
+      addNotification(`${data.user.username} left the project`, "secondary");
+    });
+  }, [
+    setOnTaskCreated,
+    setOnTaskUpdated,
+    setOnTaskDeleted,
+    setOnUserJoined,
+    setOnUserLeft,
+  ]);
+
+  // Add notification helper
+  const addNotification = (message, variant = "info") => {
+    const notification = {
+      id: Date.now(),
+      message,
+      variant,
+      timestamp: new Date(),
+    };
+    setNotifications((prev) => [notification, ...prev.slice(0, 4)]); // Keep only last 5
+
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== notification.id));
+    }, 5000);
+  };
+
+  // Fetch project information
   const fetchProjectInfo = async () => {
     try {
       setProjectLoading(true);
@@ -91,7 +175,7 @@ const TasksDashboard = () => {
     }
   };
 
-  // Add this function after your existing fetch functions
+  // Fetch project files
   const fetchProjectFiles = async () => {
     if (!projectId) return;
 
@@ -114,60 +198,39 @@ const TasksDashboard = () => {
       setProjectFiles(result.data.files || []);
     } catch (error) {
       console.error("Error fetching project files:", error);
-      // Don't set error state for files - just log it
     }
   };
 
-  /**
-   * Load both project info and tasks when component mounts or projectId changes
-   * This dual loading ensures we have both context and content
-   */
   useEffect(() => {
     if (projectId) {
       fetchProjectInfo();
-      fetchProjectFiles(); // Add this line
+      fetchProjectFiles();
     }
-    //fetchTasks();
   }, [token, projectId]);
 
-  /**
-   * Handle new task creation
-   * When a task is created, we add it to our local state for immediate feedback
-   */
+  // Task management handlers
   const handleTaskCreated = (newTask) => {
-    // Validate that the task belongs to the current project
     if (projectId && newTask.project_id !== projectId) {
       console.warn("Task created but not associated with current project");
     }
-    // Add to the beginning of the array for immediate visibility
     setTasks((prevTasks) => [newTask, ...prevTasks]);
   };
 
-  /**
-   * Task editing workflow
-   * We use a simple state flag to control which task is being edited
-   */
   const startEditing = (taskId) => {
     setEditingTaskId(taskId);
   };
 
   const handleTaskUpdated = (updatedTask) => {
-    // Update the task in our local state
     setTasks((prevTasks) =>
       prevTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task))
     );
     setEditingTaskId(null);
-    console.log("Task updated successfully:", updatedTask.title);
   };
 
   const handleEditCancel = () => {
     setEditingTaskId(null);
   };
 
-  /**
-   * Toggle task completion status
-   * This provides immediate feedback while the API call completes
-   */
   const toggleTaskCompletion = async (taskId) => {
     const currentTask = tasks.find((task) => task.id === taskId);
     if (!currentTask) return;
@@ -188,7 +251,6 @@ const TasksDashboard = () => {
       const data = await response.json();
 
       if (data.success) {
-        // Update local state with the new completion status
         setTasks((prevTasks) =>
           prevTasks.map((task) =>
             task.id === taskId ? { ...task, completed: !task.completed } : task
@@ -203,10 +265,6 @@ const TasksDashboard = () => {
     }
   };
 
-  /**
-   * Delete a task with loading state
-   * We track which task is being deleted to provide specific loading feedback
-   */
   const deleteTask = async (taskId) => {
     try {
       setDeleteLoading(taskId);
@@ -222,7 +280,6 @@ const TasksDashboard = () => {
       const data = await response.json();
 
       if (data.success) {
-        // Remove the task from local state
         setTasks((currentTasks) =>
           currentTasks.filter((task) => task.id !== taskId)
         );
@@ -237,10 +294,6 @@ const TasksDashboard = () => {
     }
   };
 
-  /**
-   * Handle delete confirmation
-   * We use a confirm dialog to prevent accidental deletions
-   */
   const handleDeleteClick = (task) => {
     const confirmMessage = `Are you sure you want to delete the task "${task.title}"?\nThis action cannot be undone.`;
     if (window.confirm(confirmMessage)) {
@@ -248,66 +301,19 @@ const TasksDashboard = () => {
     }
   };
 
-  /**
-   * Navigation helper
-   * This takes users back to the projects overview
-   */
   const handleBackToProjects = () => {
     navigate("/projects");
   };
 
-  // File Upload Handler
+  // File handling
   const handleFilesUploaded = (uploadedFiles) => {
     console.log("Files uploaded:", uploadedFiles);
-
-    // Show success message
     setSuccessMessage(`${uploadedFiles.length} file(s) uploaded successfully!`);
     setTimeout(() => setSuccessMessage(""), 5000);
-
-    // Refresh files list if you have an API endpoint
     fetchProjectFiles();
-
-    // Switch to files tab
     setActiveTab("files");
   };
 
-  // Calculate task statistics for the dashboard
-  const incompleteTasks = tasks.filter((task) => !task.completed);
-  const completedTasks = tasks.filter((task) => task.completed);
-
-  // Loading state - show while fetching data
-  if (projectId && projectLoading) {
-    return (
-      <Container
-        className="d-flex justify-content-center align-items-center"
-        style={{ minHeight: "200px" }}
-      >
-        <div className="text-center">
-          <Spinner animation="border" role="status" />
-          <div className="mt-2">{projectLoading && "Loading tasks"}</div>
-        </div>
-      </Container>
-    );
-  }
-
-  // Error state with contextual actions
-  if (error) {
-    return (
-      <Container className="mt-4">
-        <Alert variant="danger" dismissible onClose={() => setError(null)}>
-          <Alert.Heading>Error Loading Tasks</Alert.Heading>
-          <p>{error}</p>
-          {projectId && (
-            <Button variant="outline-primary" onClick={handleBackToProjects}>
-              ← Back to Projects
-            </Button>
-          )}
-        </Alert>
-      </Container>
-    );
-  }
-
-  // Add these helper functions to your component:
   const formatFileSize = (bytes) => {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -359,7 +365,6 @@ const TasksDashboard = () => {
         throw new Error(`Delete failed: ${response.status}`);
       }
 
-      // Remove from local state
       setProjectFiles((prev) => prev.filter((file) => file.id !== fileId));
       setSuccessMessage("File deleted successfully");
       setTimeout(() => setSuccessMessage(""), 3000);
@@ -369,15 +374,60 @@ const TasksDashboard = () => {
     }
   };
 
+  const incompleteTasks = tasks.filter((task) => !task.completed);
+  const completedTasks = tasks.filter((task) => task.completed);
+
+  // Loading state
+  if (projectId && projectLoading) {
+    return (
+      <Container
+        className="d-flex justify-content-center align-items-center"
+        style={{ minHeight: "200px" }}
+      >
+        <div className="text-center">
+          <Spinner animation="border" role="status" />
+          <div className="mt-2">Loading tasks...</div>
+        </div>
+      </Container>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <Container className="mt-4">
+        <Alert variant="danger" dismissible onClose={() => setError(null)}>
+          <Alert.Heading>Error Loading Tasks</Alert.Heading>
+          <p>{error}</p>
+          {projectId && (
+            <Button variant="outline-primary" onClick={handleBackToProjects}>
+              ← Back to Projects
+            </Button>
+          )}
+        </Alert>
+      </Container>
+    );
+  }
+
   return (
     <Container className="py-4">
-      {/* Project Context Header - only show when we're in a project */}
+      {/* Real-time notifications */}
+      <ToastContainer position="top-end" className="p-3">
+        {notifications.map((notification) => (
+          <Toast key={notification.id} bg={notification.variant}>
+            <Toast.Body className="text-white">
+              {notification.message}
+            </Toast.Body>
+          </Toast>
+        ))}
+      </ToastContainer>
+
+      {/* Project Context Header */}
       {projectId && projectInfo && (
         <Row className="mb-4">
           <Col>
             <div className="d-flex justify-content-between align-items-center">
               <div>
-                {/* Breadcrumb navigation for user orientation */}
                 <Breadcrumb>
                   <Breadcrumb.Item
                     onClick={handleBackToProjects}
@@ -390,9 +440,45 @@ const TasksDashboard = () => {
                   <Breadcrumb.Item active>{projectInfo.name}</Breadcrumb.Item>
                 </Breadcrumb>
 
-                <h1 className="mb-1">{projectInfo.name} - Tasks</h1>
+                <div className="d-flex align-items-center gap-3">
+                  <h1 className="mb-1">{projectInfo.name} - Tasks</h1>
+
+                  {/* Connection status indicator */}
+                  <Badge
+                    bg={isConnected ? "success" : "danger"}
+                    className="d-flex align-items-center"
+                  >
+                    {isConnected ? (
+                      <>
+                        <Wifi size={14} className="me-1" />
+                        Live
+                      </>
+                    ) : (
+                      <>
+                        <WifiOff size={14} className="me-1" />
+                        Offline
+                      </>
+                    )}
+                  </Badge>
+
+                  {/* Active users indicator */}
+                  {activeUsers.size > 0 && (
+                    <Badge bg="info" className="d-flex align-items-center">
+                      <Users size={14} className="me-1" />
+                      {activeUsers.size} active
+                    </Badge>
+                  )}
+                </div>
+
                 {projectInfo.description && (
                   <p className="text-muted">{projectInfo.description}</p>
+                )}
+
+                {/* Connection error alert */}
+                {connectionError && (
+                  <Alert variant="warning" className="mt-2">
+                    <small>WebSocket connection issue: {connectionError}</small>
+                  </Alert>
                 )}
               </div>
 
@@ -405,12 +491,28 @@ const TasksDashboard = () => {
         </Row>
       )}
 
-      {/* Task Creation Form - pass projectId for automatic association */}
+      {/* Success message */}
+      {successMessage && (
+        <Row className="mb-4">
+          <Col>
+            <Alert
+              variant="success"
+              dismissible
+              onClose={() => setSuccessMessage("")}
+            >
+              {successMessage}
+            </Alert>
+          </Col>
+        </Row>
+      )}
+
+      {/* Task Creation Form */}
       <TaskCreationForm
         onTaskCreated={handleTaskCreated}
         projectId={projectId}
       />
       <hr />
+
       {/* Task Statistics Dashboard */}
       <Row className="mb-4">
         <Col>
@@ -455,7 +557,6 @@ const TasksDashboard = () => {
                 </span>
               }
             >
-              {/* Your existing task content goes here */}
               {/* Tasks Display */}
               <Row>
                 <Col>
@@ -667,7 +768,6 @@ const TasksDashboard = () => {
                 </span>
               }
             >
-              {/* Upload interface */}
               <Card>
                 <Card.Body>
                   <h5 className="mb-3">Upload Files to Project</h5>
@@ -699,7 +799,7 @@ const TasksDashboard = () => {
         </Col>
       </Row>
 
-      {/* Task Edit Form - conditionally rendered based on editing state */}
+      {/* Task Edit Form */}
       {editingTaskId && (
         <Row className="mb-4">
           <Col>

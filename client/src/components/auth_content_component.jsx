@@ -4,6 +4,7 @@ import AuthScreen from "./auth_screen_component";
 //import LoginForm from "./login_form_component";
 import ProjectsDashboard from "./projects_dashboard_component";
 import TasksDashboard from "./tasks_dash_board_component";
+import WebSocketTest from "./websocket-test-component";
 
 // Import the useAuth hook from your authentication provider file
 import { useAuth } from "./hooks/use_auth";
@@ -28,6 +29,9 @@ const AuthContent = () => {
 
         {/* Individual project route shows tasks scoped to that project */}
         <Route path="/projects/:projectId/tasks" element={<TasksDashboard />} />
+
+        {/* Individual project route shows tasks scoped to that project */}
+        <Route path="/web-socket-test" element={<WebSocketTest />} />
 
         {/* Fallback route for any unmatched paths */}
         <Route path="*" element={<ProjectsDashboard />} />
