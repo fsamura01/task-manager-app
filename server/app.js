@@ -18,6 +18,18 @@ const {
   loginLimiter,
   generateToken,
 } = require("./utils/jwttoken-loginlimiter");
+const GitHubOAuthService = require("./services/github_oauth_service");
+const GitHubApiService = require("./services/github_api_service");
+const GitHubDbHelpers = require("./utils/github_db_helpers");
+const AuthenticationDbHelper = require("./utils/authentication_db_helpers");
+
+const session = require("express-session");
+
+// Initialize services
+const githubOAuth = new GitHubOAuthService();
+const githubApi = new GitHubApiService();
+
+const tempTokenStore = new Map();
 
 require("dotenv").config();
 
@@ -28,6 +40,15 @@ console.log(require("crypto").randomBytes(32).toString("base64")); // 'hex'
 // Middleware setup
 app.use(cors());
 app.use(express.json());
+
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "your-session-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false, maxAge: 3600000 }, // 1 hour
+  })
+);
 
 // Static file serving with basic security
 app.use(
@@ -72,12 +93,16 @@ app.post("/api/auth/register", async (req, res) => {
 
     // Step 3: Check if user already exists
     // Like checking if someone already has an account before creating a new one
-    const existingUser = await db.query(
+    /*   const existingUser = await db.query(
       "SELECT id FROM users WHERE username = $1 OR email = $2",
       [username, email]
-    );
+    ); */
 
-    if (existingUser.rows.length > 0) {
+    const existingUser = await AuthenticationDbHelper.getExistingUser(
+      username,
+      email
+    );
+    if (existingUser.length > 0) {
       return res.status(409).json({
         success: false,
         error: "Username or email already exists",
@@ -90,14 +115,21 @@ app.post("/api/auth/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     // Step 5: Create the new user in database
-    const newUser = await db.query(
+    /*  const newUser = await db.query(
       "INSERT INTO users (username, email, password_hash, name) VALUES ($1, $2, $3, $4) RETURNING id, username, email, name",
       [username, email, hashedPassword, displayName] // Using username as default name
+    ); */
+
+    const newUser = await AuthenticationDbHelper.createNewUser(
+      username,
+      email,
+      hashedPassword,
+      displayName
     );
 
     // Step 6: Generate JWT token for immediate login
     // Like giving them their key card right after registration
-    const token = generateToken(newUser.rows[0].id, newUser.rows[0].username);
+    const token = generateToken(newUser[0].id, newUser[0].username);
 
     // Step 7: Send success response (never send back the password!)
     res.status(201).json({
@@ -105,10 +137,10 @@ app.post("/api/auth/register", async (req, res) => {
       message: "User registered successfully",
       data: {
         user: {
-          id: newUser.rows[0].id,
-          username: newUser.rows[0].username,
-          email: newUser.rows[0].email,
-          name: newUser.rows[0].name,
+          id: newUser[0].id,
+          username: newUser[0].username,
+          email: newUser[0].email,
+          name: newUser[0].name,
         },
         token: token,
       },
@@ -136,14 +168,15 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
       });
     }
 
-    // Step 2: Find user in database
-    // Like looking up someone's account information
-    const user = await db.query(
+    /* Step 2: Find user in database
+    Like looking up someone's account information */
+    /*  const user = await db.query(
       "SELECT id, username, email, password_hash, name FROM users WHERE username = $1",
       [username]
-    );
+    ); */
 
-    if (user.rows.length === 0) {
+    const user = await AuthenticationDbHelper.login(username);
+    if (user.length === 0) {
       return res.status(401).json({
         success: false,
         error: "Invalid username or password",
@@ -152,10 +185,7 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
 
     // Step 3: Verify password
     // Like checking if their key creates the same fingerprint
-    const validPassword = await bcrypt.compare(
-      password,
-      user.rows[0].password_hash
-    );
+    const validPassword = await bcrypt.compare(password, user[0].password_hash);
 
     if (!validPassword) {
       return res.status(401).json({
@@ -166,7 +196,7 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
 
     // Step 4: Generate JWT token
     // Like giving them a fresh key card
-    const token = generateToken(user.rows[0].id, user.rows[0].username);
+    const token = generateToken(user[0].id, user.username);
 
     // Step 5: Send success response
     res.json({
@@ -174,10 +204,10 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
       message: "Login successful",
       data: {
         user: {
-          id: user.rows[0].id,
-          username: user.rows[0].username,
-          email: user.rows[0].email,
-          name: user.rows[0].name,
+          id: user[0].id,
+          username: user[0].username,
+          email: user[0].email,
+          name: user[0].name,
         },
         token: token,
       },
@@ -2280,6 +2310,884 @@ app.get("/api/projects/:id/files", verifyToken, async (req, res) => {
     });
   }
 });
+
+// ======================
+// GITHUB OAUTH ENDPOINTS
+// ======================
+
+// Step 1: Initiate GitHub OAuth flow
+app.get("/api/auth/github", verifyToken, async (req, res) => {
+  console.log("=== DEBUG: GitHub OAuth flow ===");
+  try {
+    const redirectUri = `${req.protocol}://${req.get(
+      "host"
+    )}/api/auth/github/callback`;
+    const { url, state } = githubOAuth.generateAuthUrl(redirectUri);
+
+    // Store state in session or database for CSRF protection
+    // For simplicity, we're using a temporary in-memory store
+    // In production, use Redis or database
+    req.session = req.session || {};
+    req.session.githubOAuthState = state;
+
+    res.json({
+      success: true,
+      data: {
+        authorization_url: url,
+        state: state,
+      },
+    });
+  } catch (error) {
+    console.error("Error initiating GitHub OAuth:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to initiate GitHub authentication",
+    });
+  }
+});
+
+// Step 2: Handle GitHub OAuth callback
+/* app.get("/api/auth/github/callback", async (req, res) => {
+  console.log("=== DEBUG: GitHub OAuth callback ===");
+  try {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: `GitHub OAuth error: ${error}`,
+      });
+    }
+
+    if (!code || !state) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing authorization code or state parameter",
+      });
+    }
+
+    // Verify state parameter (CSRF protection)
+    // This is a simplified check - implement proper session management
+
+    // Exchange code for access token
+    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
+
+    // Get GitHub user information
+    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
+
+    // This callback doesn't have verifyToken middleware, so we need to handle user identification
+    // In a real app, you might pass user info through state parameter or handle this differently
+    // For now, redirect to frontend with token data
+    const callbackUrl = `http://localhost:5173/github-callback?success=true&username=${githubUser.username}`;
+    res.redirect(callbackUrl);
+  } catch (error) {
+    console.error("Error in GitHub OAuth callback:", error);
+    const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
+      error.message
+    )}`;
+    res.redirect(errorUrl);
+  }
+}); */
+
+// In your server.js, update the GitHub callback endpoint
+/* app.get("/api/auth/github/callback", async (req, res) => {
+  console.log("=== DEBUG: GitHub OAuth callback ===");
+  console.log("Query params:", req.query);
+
+  try {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      console.log("OAuth error received:", error);
+      const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
+        error
+      )}`;
+      return res.redirect(errorUrl);
+    }
+
+    if (!code || !state) {
+      console.log("Missing code or state:", { code: !!code, state: !!state });
+      const errorUrl = `http://localhost:5173/github-callback?error=missing_auth_data`;
+      return res.redirect(errorUrl);
+    }
+
+    console.log("Step 1: Getting GitHub user info for username...");
+    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
+    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
+
+    // Include code and state in the redirect so frontend can complete the integration
+    const callbackUrl = `http://localhost:5173/github-callback?success=true&username=${
+      githubUser.username
+    }&code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
+    console.log("Redirecting to:", callbackUrl);
+
+    res.redirect(callbackUrl);
+  } catch (error) {
+    console.error("Error in GitHub OAuth callback:", error);
+    const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
+      error.message
+    )}`;
+    res.redirect(errorUrl);
+  }
+});
+ */
+
+app.get("/api/auth/github/callback", async (req, res) => {
+  console.log("=== GitHub OAuth callback ===");
+  try {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
+        error
+      )}`;
+      return res.redirect(errorUrl);
+    }
+
+    if (!code || !state) {
+      const errorUrl = `http://localhost:5173/github-callback?error=missing_auth_data`;
+      return res.redirect(errorUrl);
+    }
+
+    // Use the code immediately (before it expires)
+    console.log("Exchanging code for token...");
+    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
+
+    console.log("Getting GitHub user info...");
+    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
+
+    // Store the integration data temporarily with a unique key
+    const tempKey = `github_${Date.now()}_${Math.random()}`;
+    tempTokenStore.set(tempKey, {
+      githubUser: githubUser,
+      accessToken: tokenData.access_token,
+      createdAt: Date.now(),
+    });
+
+    // Clean up old entries (older than 5 minutes)
+    for (let [key, value] of tempTokenStore.entries()) {
+      if (Date.now() - value.createdAt > 5 * 60 * 1000) {
+        tempTokenStore.delete(key);
+      }
+    }
+
+    // Redirect with the temporary key instead of code/state
+    const callbackUrl = `http://localhost:5173/github-callback?success=true&username=${githubUser.username}&temp_key=${tempKey}`;
+    console.log("Redirecting to:", callbackUrl);
+
+    res.redirect(callbackUrl);
+  } catch (error) {
+    console.error("Error in GitHub OAuth callback:", error);
+    const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
+      error.message
+    )}`;
+    res.redirect(errorUrl);
+  }
+});
+
+// Step 3: Complete GitHub integration (called from frontend after callback)
+/* app.post("/api/integrations/github/connect", verifyToken, async (req, res) => {
+  console.log("=== CONNECT ENDPOINT CALLED ===");
+  console.log("Headers:", req.headers.authorization);
+  console.log("Body:", req.body);
+  console.log("User:", req.user);
+  try {
+    const { code, state } = req.body;
+
+    if (!code || !state) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing authorization code or state parameter",
+      });
+    }
+
+    // Exchange code for access token
+    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
+
+    // Get GitHub user information
+    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
+
+    // Save integration to database
+    const integration = await GitHubDbHelpers.upsertGitHubIntegration(
+      req.user.userId,
+      githubUser,
+      tokenData.access_token
+    );
+
+    res.json({
+      success: true,
+      message: "GitHub integration successful",
+      data: {
+        integration_id: integration.id,
+        github_username: githubUser.username,
+        avatar_url: githubUser.avatar_url,
+        connected_at: integration.created_at,
+      },
+    });
+  } catch (error) {
+    console.error("Error connecting GitHub integration:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to connect GitHub integration",
+    });
+  }
+}); */
+
+// Updated connect endpoint
+app.post("/api/integrations/github/connect", verifyToken, async (req, res) => {
+  console.log("=== Connect endpoint called ===");
+  try {
+    const { temp_key } = req.body;
+
+    if (!temp_key) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing temporary key",
+      });
+    }
+
+    // Retrieve stored data
+    const storedData = tempTokenStore.get(temp_key);
+    if (!storedData) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or expired temporary key",
+      });
+    }
+
+    // Remove from temporary storage
+    tempTokenStore.delete(temp_key);
+
+    // Save to database
+    console.log("Saving integration to database...");
+    const integration = await GitHubDbHelpers.upsertGitHubIntegration(
+      req.user.userId,
+      storedData.githubUser,
+      storedData.accessToken
+    );
+
+    console.log("Integration saved successfully:", integration.id);
+
+    res.json({
+      success: true,
+      message: "GitHub integration successful",
+      data: {
+        integration_id: integration.id,
+        github_username: storedData.githubUser.username,
+        avatar_url: storedData.githubUser.avatar_url,
+        connected_at: integration.created_at,
+      },
+    });
+  } catch (error) {
+    console.error("Error in connect endpoint:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to connect GitHub integration",
+      debug_error: error.message,
+    });
+  }
+});
+
+// ======================
+// GITHUB INTEGRATION MANAGEMENT
+// ======================
+
+// Get GitHub integration status
+/* app.get("/api/integrations/github/status", verifyToken, async (req, res) => {
+  try {
+    const stats = await GitHubDbHelpers.getGitHubIntegrationStats(
+      req.user.userId
+    );
+
+    if (!stats) {
+      return res.json({
+        success: true,
+        data: {
+          connected: false,
+          message: "No GitHub integration found",
+        },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        connected: true,
+        ...stats,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting GitHub integration status:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to get GitHub integration status",
+    });
+  }
+}); */
+
+// Add these debug versions temporarily to your server.js
+// Replace your existing GitHub endpoints with these debug versions
+
+// Debug: Get GitHub integration status
+app.get("/api/integrations/github/status", verifyToken, async (req, res) => {
+  console.log("=== DEBUG: GitHub Status Endpoint Called ===");
+  console.log("User ID:", req.user.userId);
+  console.log("User Username:", req.user.username);
+
+  try {
+    console.log("Calling GitHubDbHelpers.getGitHubIntegrationStats...");
+    const stats = await GitHubDbHelpers.getGitHubIntegrationStats(
+      req.user.userId
+    );
+
+    console.log("Stats result:", stats);
+
+    if (!stats) {
+      console.log("No integration found, returning not connected");
+      return res.json({
+        success: true,
+        data: {
+          connected: false,
+          message: "No GitHub integration found",
+        },
+      });
+    }
+
+    console.log("Integration found, returning stats:", stats);
+    res.json({
+      success: true,
+      data: {
+        connected: true,
+        ...stats,
+      },
+    });
+  } catch (error) {
+    console.error("=== ERROR in GitHub status endpoint ===");
+    console.error("Error details:", error);
+    console.error("Stack trace:", error.stack);
+    res.status(500).json({
+      success: false,
+      error: "Failed to get GitHub integration status",
+      debug_message: error.message,
+    });
+  }
+});
+
+// Debug: Get user's GitHub repositories
+/* app.get(
+  "/api/integrations/github/repositories",
+  verifyToken,
+  async (req, res) => {
+    console.log("=== DEBUG: GitHub Repositories Endpoint Called ===");
+    console.log("User ID:", req.user.userId);
+
+    try {
+      console.log("Step 1: Getting GitHub integration...");
+      const integration = await GitHubDbHelpers.getGitHubIntegration(
+        req.user.userId
+      );
+      console.log("Integration result:", integration);
+
+      if (!integration) {
+        console.log("No integration found");
+        return res.status(404).json({
+          success: false,
+          error: "GitHub integration not found",
+        });
+      }
+
+      console.log("Step 2: Validating token...");
+      const isValid = await githubOAuth.validateToken(integration.access_token);
+      console.log("Token validation result:", isValid);
+
+      if (!isValid) {
+        console.log("Token is invalid");
+        return res.status(401).json({
+          success: false,
+          error:
+            "GitHub access token is invalid. Please reconnect your GitHub account.",
+        });
+      }
+
+      console.log("Step 3: Fetching repositories from GitHub...");
+      const repositories = await githubOAuth.getUserRepositories(
+        integration.access_token,
+        {
+          sort: "updated",
+          per_page: 100,
+          type: "all",
+        }
+      );
+      console.log("GitHub repositories count:", repositories.length);
+      console.log(
+        "First few repos:",
+        repositories
+          .slice(0, 3)
+          .map((r) => ({ name: r.full_name, has_issues: r.has_issues }))
+      );
+
+      console.log("Step 4: Getting configured repositories from database...");
+      const configuredRepos = await GitHubDbHelpers.getGitHubRepositories(
+        integration.id
+      );
+      console.log("Configured repos count:", configuredRepos.length);
+      console.log("Configured repos:", configuredRepos);
+
+      const configuredMap = configuredRepos.reduce((acc, repo) => {
+        acc[repo.repo_full_name] = repo;
+        return acc;
+      }, {});
+      console.log("Configured map:", configuredMap);
+
+      console.log("Step 5: Merging data...");
+      const enrichedRepos = repositories
+        .filter((repo) => {
+          console.log(
+            `Repo ${repo.full_name}: has_issues = ${repo.has_issues}`
+          );
+          return repo.has_issues;
+        })
+        .map((repo) => ({
+          ...repo,
+          configured: !!configuredMap[repo.full_name],
+          project_id: configuredMap[repo.full_name]?.project_id || null,
+          project_name: configuredMap[repo.full_name]?.project_name || null,
+          sync_enabled: configuredMap[repo.full_name]?.sync_enabled || false,
+        }));
+
+      console.log("Final enriched repos count:", enrichedRepos.length);
+      console.log("Final enriched repos (first 3):", enrichedRepos.slice(0, 3));
+
+      res.json({
+        success: true,
+        data: enrichedRepos,
+        count: enrichedRepos.length,
+        debug_info: {
+          total_github_repos: repositories.length,
+          repos_with_issues: repositories.filter((r) => r.has_issues).length,
+          configured_repos: configuredRepos.length,
+        },
+      });
+    } catch (error) {
+      console.error("=== ERROR in GitHub repositories endpoint ===");
+      console.error("Error details:", error);
+      console.error("Stack trace:", error.stack);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch GitHub repositories",
+        debug_message: error.message,
+      });
+    }
+  }
+); */
+
+// Debug endpoint to check database directly
+app.get("/api/debug/github-integration", verifyToken, async (req, res) => {
+  console.log("=== DEBUG: Direct Database Check ===");
+  try {
+    // Check if tables exist
+    const tableCheck = await db.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'task_management' 
+      AND table_name IN ('github_integrations', 'github_repositories')
+    `);
+    console.log("Available tables:", tableCheck.rows);
+
+    // Check integration records
+    const integrationCheck = await db.query(
+      "SELECT * FROM github_integrations WHERE user_id = $1",
+      [req.user.userId]
+    );
+    console.log("Integration records:", integrationCheck.rows);
+
+    // Check all integrations (for debugging)
+    const allIntegrations = await db.query(
+      "SELECT id, user_id, github_username, is_active, created_at FROM github_integrations"
+    );
+    console.log("All integrations:", allIntegrations.rows);
+
+    res.json({
+      success: true,
+      debug_data: {
+        user_id: req.user.userId,
+        available_tables: tableCheck.rows,
+        user_integrations: integrationCheck.rows,
+        all_integrations: allIntegrations.rows,
+      },
+    });
+  } catch (error) {
+    console.error("Debug endpoint error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack,
+    });
+  }
+});
+
+// Get user's GitHub repositories
+app.get(
+  "/api/integrations/github/repositories",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const integration = await GitHubDbHelpers.getGitHubIntegration(
+        req.user.userId
+      );
+
+      if (!integration) {
+        return res.status(404).json({
+          success: false,
+          error: "GitHub integration not found",
+        });
+      }
+
+      // Validate token
+      const isValid = await githubOAuth.validateToken(integration.access_token);
+      if (!isValid) {
+        return res.status(401).json({
+          success: false,
+          error:
+            "GitHub access token is invalid. Please reconnect your GitHub account.",
+        });
+      }
+
+      // Get repositories from GitHub API
+      const repositories = await githubOAuth.getUserRepositories(
+        integration.access_token,
+        {
+          sort: "updated",
+          per_page: 100,
+          type: "all",
+        }
+      );
+
+      // Get configured repositories from our database
+      const configuredRepos = await GitHubDbHelpers.getGitHubRepositories(
+        integration.id
+      );
+      const configuredMap = configuredRepos.reduce((acc, repo) => {
+        acc[repo.repo_full_name] = repo;
+        return acc;
+      }, {});
+
+      // Merge GitHub data with our configuration
+      const enrichedRepos = repositories
+        .filter((repo) => repo.has_issues) // Only show repos with issues enabled
+        .map((repo) => ({
+          ...repo,
+          configured: !!configuredMap[repo.full_name],
+          project_id: configuredMap[repo.full_name]?.project_id || null,
+          project_name: configuredMap[repo.full_name]?.project_name || null,
+          sync_enabled: configuredMap[repo.full_name]?.sync_enabled || false,
+        }));
+
+      res.json({
+        success: true,
+        data: enrichedRepos,
+        count: enrichedRepos.length,
+      });
+    } catch (error) {
+      console.error("Error fetching GitHub repositories:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch GitHub repositories",
+      });
+    }
+  }
+);
+
+// ======================
+// ISSUE IMPORT ENDPOINTS
+// ======================
+
+// Import issues from a specific repository
+app.post(
+  "/api/integrations/github/import-issues",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { repo_full_name, project_id, options = {} } = req.body;
+
+      if (!repo_full_name || !project_id) {
+        return res.status(400).json({
+          success: false,
+          error: "Repository name and project ID are required",
+        });
+      }
+
+      // Verify project belongs to user
+      const projectCheck = await db.query(
+        "SELECT id, name FROM projects WHERE id = $1 AND user_id = $2",
+        [project_id, req.user.userId]
+      );
+
+      if (projectCheck.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Project not found or access denied",
+        });
+      }
+
+      const project = projectCheck.rows[0];
+
+      // Get GitHub integration
+      const integration = await GitHubDbHelpers.getGitHubIntegration(
+        req.user.userId
+      );
+      if (!integration) {
+        return res.status(404).json({
+          success: false,
+          error: "GitHub integration not found",
+        });
+      }
+
+      // Parse repository owner and name
+      const [owner, repo] = repo_full_name.split("/");
+      if (!owner || !repo) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid repository format. Use "owner/repo"',
+        });
+      }
+
+      // Configure repository in our database
+      await GitHubDbHelpers.upsertGitHubRepository(
+        integration.id,
+        {
+          full_name: repo_full_name,
+          id: Date.now(), // We'll get the real ID when we fetch repo details
+        },
+        project_id
+      );
+
+      // Fetch issues from GitHub
+      const issueOptions = {
+        state: options.state || "open",
+        per_page: options.per_page || 50,
+        labels: options.labels || "",
+        sort: "updated",
+        direction: "desc",
+      };
+
+      const { issues, rateLimit } = await githubApi.getRepositoryIssues(
+        owner,
+        repo,
+        integration.access_token,
+        issueOptions
+      );
+
+      if (issues.length === 0) {
+        return res.json({
+          success: true,
+          message: `No issues found in ${repo_full_name} with the specified criteria`,
+          data: {
+            imported_count: 0,
+            skipped_count: 0,
+            total_found: 0,
+            rate_limit: rateLimit,
+          },
+        });
+      }
+
+      // Create tasks from issues
+      const createdTasks = await GitHubDbHelpers.createTasksFromIssues(
+        issues,
+        req.user.userId,
+        project_id,
+        repo_full_name
+      );
+
+      // Update sync timestamp
+      await GitHubDbHelpers.updateLastSyncTime(integration.id);
+
+      res.json({
+        success: true,
+        message: `Successfully imported ${createdTasks.length} issues from ${repo_full_name}`,
+        data: {
+          imported_count: createdTasks.length,
+          skipped_count: issues.length - createdTasks.length,
+          total_found: issues.length,
+          project_name: project.name,
+          repository: repo_full_name,
+          created_tasks: createdTasks.map((task) => ({
+            id: task.id,
+            title: task.title,
+            github_issue_number: task.github_issue_number,
+            github_issue_url: task.github_issue_url,
+          })),
+          rate_limit: rateLimit,
+        },
+      });
+    } catch (error) {
+      console.error("Error importing GitHub issues:", error);
+
+      // Handle specific GitHub API errors
+      if (error.message.includes("Rate limit exceeded")) {
+        return res.status(429).json({
+          success: false,
+          error: "GitHub API rate limit exceeded",
+          message: error.message,
+        });
+      }
+
+      if (error.message.includes("404")) {
+        return res.status(404).json({
+          success: false,
+          error: "Repository not found or access denied",
+        });
+      }
+
+      res.status(500).json({
+        success: false,
+        error: "Failed to import GitHub issues",
+        message: error.message,
+      });
+    }
+  }
+);
+
+// Get import preview (issues that would be imported)
+app.get(
+  "/api/integrations/github/repositories/:owner/:repo/issues/preview",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { owner, repo } = req.params;
+      const { state = "open", labels = "", per_page = 10 } = req.query;
+
+      const integration = await GitHubDbHelpers.getGitHubIntegration(
+        req.user.userId
+      );
+      if (!integration) {
+        return res.status(404).json({
+          success: false,
+          error: "GitHub integration not found",
+        });
+      }
+
+      const { issues, pagination, rateLimit } =
+        await githubApi.getRepositoryIssues(
+          owner,
+          repo,
+          integration.access_token,
+          { state, labels, per_page }
+        );
+
+      // Check which issues already exist as tasks
+      const existingIssueIds = [];
+      if (issues.length > 0) {
+        const issueIds = issues.map((issue) => issue.github_issue_id);
+        const existingTasks = await db.query(
+          "SELECT github_issue_id FROM tasks WHERE github_issue_id = ANY($1) AND user_id = $2",
+          [issueIds, req.user.userId]
+        );
+        existingIssueIds.push(
+          ...existingTasks.rows.map((task) => task.github_issue_id)
+        );
+      }
+
+      const enrichedIssues = issues.map((issue) => ({
+        ...issue,
+        already_imported: existingIssueIds.includes(issue.github_issue_id),
+      }));
+
+      res.json({
+        success: true,
+        data: {
+          issues: enrichedIssues,
+          total_issues: enrichedIssues.length,
+          new_issues: enrichedIssues.filter((i) => !i.already_imported).length,
+          existing_issues: enrichedIssues.filter((i) => i.already_imported)
+            .length,
+          pagination,
+          rate_limit: rateLimit,
+        },
+      });
+    } catch (error) {
+      console.error("Error getting issues preview:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to get issues preview",
+      });
+    }
+  }
+);
+
+// Disconnect GitHub integration
+app.delete("/api/integrations/github", verifyToken, async (req, res) => {
+  try {
+    await GitHubDbHelpers.deactivateGitHubIntegration(req.user.userId);
+
+    res.json({
+      success: true,
+      message: "GitHub integration disconnected successfully",
+    });
+  } catch (error) {
+    console.error("Error disconnecting GitHub integration:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to disconnect GitHub integration",
+    });
+  }
+});
+
+// Configure repository settings
+app.put(
+  "/api/integrations/github/repositories/:repo_full_name",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const repoFullName = decodeURIComponent(req.params.repo_full_name);
+      const { project_id, sync_enabled = true } = req.body;
+
+      const integration = await GitHubDbHelpers.getGitHubIntegration(
+        req.user.userId
+      );
+      if (!integration) {
+        return res.status(404).json({
+          success: false,
+          error: "GitHub integration not found",
+        });
+      }
+
+      // Verify project belongs to user if project_id is provided
+      if (project_id) {
+        const projectCheck = await db.query(
+          "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
+          [project_id, req.user.userId]
+        );
+
+        if (projectCheck.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: "Project not found or access denied",
+          });
+        }
+      }
+
+      // Update repository configuration
+      const repoConfig = await GitHubDbHelpers.upsertGitHubRepository(
+        integration.id,
+        { full_name: repoFullName, id: Date.now() },
+        project_id
+      );
+
+      res.json({
+        success: true,
+        message: "Repository configuration updated",
+        data: repoConfig,
+      });
+    } catch (error) {
+      console.error("Error configuring repository:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to configure repository",
+      });
+    }
+  }
+);
 
 /* app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

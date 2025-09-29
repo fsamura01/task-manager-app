@@ -24,6 +24,45 @@ const query = async (text, params) => {
   }
 };
 
+// Function to get a client from the pool for transactions
+// This is needed for the GitHub integration's transaction handling
+const getClient = async () => {
+  try {
+    const client = await pool.connect();
+
+    // Add query method to client for consistency
+    const query = client.query;
+    const release = client.release;
+
+    // Set a timeout for the client
+    const timeout = setTimeout(() => {
+      console.error("A client has been checked out for more than 5 seconds!");
+      console.error(
+        "The last executed query on this client was: ",
+        client.lastQuery
+      );
+    }, 5000);
+
+    // Override the release method to clear the timeout
+    client.release = (err) => {
+      clearTimeout(timeout);
+      // Call the actual release method
+      release.call(client, err);
+    };
+
+    // Override query method to track last query for debugging
+    client.query = (...args) => {
+      client.lastQuery = args;
+      return query.apply(client, args);
+    };
+
+    return client;
+  } catch (error) {
+    console.error("Error getting database client:", error);
+    throw error;
+  }
+};
+
 // Function to test database connectivity
 const testConnection = async () => {
   try {
@@ -36,8 +75,26 @@ const testConnection = async () => {
   }
 };
 
+// Graceful shutdown handling
+process.on("SIGINT", () => {
+  console.log("Received SIGINT, closing database pool...");
+  pool.end(() => {
+    console.log("Database pool closed");
+    process.exit(0);
+  });
+});
+
+process.on("SIGTERM", () => {
+  console.log("Received SIGTERM, closing database pool...");
+  pool.end(() => {
+    console.log("Database pool closed");
+    process.exit(0);
+  });
+});
+
 module.exports = {
   query,
+  getClient,
   testConnection,
   pool,
 };

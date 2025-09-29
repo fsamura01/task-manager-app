@@ -2,6 +2,8 @@ import { Route, Routes } from "react-router-dom";
 import AppNavbar from "./app_navbar_component";
 import AuthScreen from "./auth_screen_component";
 //import LoginForm from "./login_form_component";
+import GitHubCallback from "./github_callback";
+import GitHubIntegrationComponent from "./github_integration_component";
 import ProjectsDashboard from "./projects_dashboard_component";
 import TasksDashboard from "./tasks_dash_board_component";
 import WebSocketTest from "./websocket-test-component";
@@ -33,6 +35,13 @@ const AuthContent = () => {
         {/* Individual project route shows tasks scoped to that project */}
         <Route path="/web-socket-test" element={<WebSocketTest />} />
 
+        {/* GitHub integrated component */}
+        <Route
+          path="/integrations/github"
+          element={<GitHubIntegrationComponent />}
+        />
+
+        <Route path="/github-callback" element={<GitHubCallback />} />
         {/* Fallback route for any unmatched paths */}
         <Route path="*" element={<ProjectsDashboard />} />
       </Routes>
