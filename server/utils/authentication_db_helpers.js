@@ -2,17 +2,17 @@ const db = require("../database");
 
 class AuthenticationDbHelper {
   /**
-   * Retrieves user record(s) for the given username to support the login flow.
+   * Retrieves user record(s) for the given username or email to support the login flow.
    * Executes a parameterized query selecting id, username, email, password_hash, and name.
    *
-   * @param {string} username - The username to look up.
+   * @param {string} identifier - Username or email to look up.
    * @returns {Promise<Array<{id: number, username: string, email: string, password_hash: string, name: string}>>} Resolves with matching user rows.
    * @throws {Error} If the database query fails.
    */
-  static async login(username) {
+  static async login(identifier) {
     try {
-      const query = `SELECT id, username, email, password_hash, name FROM users WHERE username = $1`;
-      const user = await db.query(query, [username]);
+      const query = `SELECT id, username, email, password_hash, name FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`;
+      const user = await db.query(query, [identifier]);
       return user.rows;
     } catch (error) {
       console.error("Login error:", error);
@@ -32,13 +32,13 @@ class AuthenticationDbHelper {
    */
   static async getExistingUser(username, email) {
     try {
-      const query = `SELECT id FROM users WHERE username = $1 OR email = $2`;
+      const query = `SELECT id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)`;
       const existingUser = await db.query(query, [username, email]);
 
       return existingUser.rows;
     } catch (error) {
-      console.error("Username or email already exists:", error);
-      throw new Error("Username or email already exists");
+      console.error("Failed to check existing user:", error);
+      throw new Error("Failed to check existing user");
     }
   }
 

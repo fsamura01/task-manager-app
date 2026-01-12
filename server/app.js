@@ -4,6 +4,7 @@ const cors = require("cors");
 const db = require("./database");
 const fs = require("fs-extra");
 const path = require("path");
+const crypto = require("crypto");
 const calculateFileHash = require("./utils/calculate-filehash");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -35,18 +36,25 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+// Dynamic require in the console log
 console.log(require("crypto").randomBytes(32).toString("base64")); // 'hex'
 
 // Middleware setup
 app.use(cors());
 app.use(express.json());
 
+// Session middleware for OAuth state management
 app.use(
   session({
     secret: process.env.SESSION_SECRET || "your-session-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 3600000 }, // 1 hour
+    cookie: {
+      secure: false,
+      maxAge: 3600000, // 1 hour
+      sameSite: "lax", // ✅ ADD THIS
+      httpOnly: true, // ✅ ADD THIS for security
+    },
   })
 );
 
@@ -196,7 +204,7 @@ app.post("/api/auth/login", loginLimiter, async (req, res) => {
 
     // Step 4: Generate JWT token
     // Like giving them a fresh key card
-    const token = generateToken(user[0].id, user.username);
+    const token = generateToken(user[0].id, user[0].username);
 
     // Step 5: Send success response
     res.json({
@@ -1356,7 +1364,6 @@ app.post(
       const filePath = req.file.key; // Use S3 key as file_path
 
       // Generate upload hash for file validation (optional)
-      const crypto = require("crypto");
       const uploadHash = crypto
         .createHash("md5")
         .update(req.file.key + Date.now())
@@ -2315,278 +2322,375 @@ app.get("/api/projects/:id/files", verifyToken, async (req, res) => {
 // GITHUB OAUTH ENDPOINTS
 // ======================
 
+// Create a simple in-memory store (or use your database)
+const oauthStates = new Map();
+const completedOAuthFlows = new Map(); // Store completed OAuth data temporarily
+
 // Step 1: Initiate GitHub OAuth flow
+// ============================================
+// GITHUB OAUTH - INITIATE AUTHENTICATION FLOW
+// ============================================
+
+/**
+ * Initiates GitHub OAuth flow for authenticated users
+ *
+ * Flow:
+ * 1. Generate authorization URL with CSRF state token
+ * 2. Store state temporarily for validation in callback
+ * 3. Return URL to frontend
+ * 4. Frontend redirects user to GitHub for authorization
+ *
+ * Security:
+ * - Requires valid JWT token (verifyToken middleware)
+ * - Uses CSRF state token to prevent replay attacks
+ * - State expires after 10 minutes (validated in callback)
+ */
 app.get("/api/auth/github", verifyToken, async (req, res) => {
-  console.log("=== DEBUG: GitHub OAuth flow ===");
   try {
-    const redirectUri = `${req.protocol}://${req.get(
-      "host"
-    )}/api/auth/github/callback`;
+    // ============================================
+    // GENERATE AUTHORIZATION URL
+    // ============================================
+
+    const redirectUri = buildCallbackUrl(req);
     const { url, state } = githubOAuth.generateAuthUrl(redirectUri);
 
-    // Store state in session or database for CSRF protection
-    // For simplicity, we're using a temporary in-memory store
-    // In production, use Redis or database
-    req.session = req.session || {};
-    req.session.githubOAuthState = state;
+    // ============================================
+    // STORE STATE FOR CSRF VALIDATION
+    // ============================================
 
-    res.json({
+    storeOAuthState(state, req.user.userId);
+
+    // ============================================
+    // RETURN AUTHORIZATION URL TO CLIENT
+    // ============================================
+
+    return res.json({
       success: true,
-      data: {
-        authorization_url: url,
-        state: state,
-      },
+      authorization_url: url,
     });
   } catch (error) {
-    console.error("Error initiating GitHub OAuth:", error);
-    res.status(500).json({
+    console.error("GitHub OAuth initiation failed:", error);
+
+    return res.status(500).json({
       success: false,
       error: "Failed to initiate GitHub authentication",
     });
   }
 });
 
-// Step 2: Handle GitHub OAuth callback
-/* app.get("/api/auth/github/callback", async (req, res) => {
-  console.log("=== DEBUG: GitHub OAuth callback ===");
-  try {
-    const { code, state, error } = req.query;
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
 
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        error: `GitHub OAuth error: ${error}`,
-      });
-    }
-
-    if (!code || !state) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing authorization code or state parameter",
-      });
-    }
-
-    // Verify state parameter (CSRF protection)
-    // This is a simplified check - implement proper session management
-
-    // Exchange code for access token
-    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
-
-    // Get GitHub user information
-    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
-
-    // This callback doesn't have verifyToken middleware, so we need to handle user identification
-    // In a real app, you might pass user info through state parameter or handle this differently
-    // For now, redirect to frontend with token data
-    const callbackUrl = `http://localhost:5173/github-callback?success=true&username=${githubUser.username}`;
-    res.redirect(callbackUrl);
-  } catch (error) {
-    console.error("Error in GitHub OAuth callback:", error);
-    const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
-      error.message
-    )}`;
-    res.redirect(errorUrl);
-  }
-}); */
-
-// In your server.js, update the GitHub callback endpoint
-/* app.get("/api/auth/github/callback", async (req, res) => {
-  console.log("=== DEBUG: GitHub OAuth callback ===");
-  console.log("Query params:", req.query);
-
-  try {
-    const { code, state, error } = req.query;
-
-    if (error) {
-      console.log("OAuth error received:", error);
-      const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
-        error
-      )}`;
-      return res.redirect(errorUrl);
-    }
-
-    if (!code || !state) {
-      console.log("Missing code or state:", { code: !!code, state: !!state });
-      const errorUrl = `http://localhost:5173/github-callback?error=missing_auth_data`;
-      return res.redirect(errorUrl);
-    }
-
-    console.log("Step 1: Getting GitHub user info for username...");
-    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
-    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
-
-    // Include code and state in the redirect so frontend can complete the integration
-    const callbackUrl = `http://localhost:5173/github-callback?success=true&username=${
-      githubUser.username
-    }&code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
-    console.log("Redirecting to:", callbackUrl);
-
-    res.redirect(callbackUrl);
-  } catch (error) {
-    console.error("Error in GitHub OAuth callback:", error);
-    const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
-      error.message
-    )}`;
-    res.redirect(errorUrl);
-  }
-});
+/**
+ * Builds the OAuth callback URL based on the incoming request
+ * @param {Request} req - Express request object
+ * @returns {string} Full callback URL
  */
+function buildCallbackUrl(req) {
+  return `${req.protocol}://${req.get("host")}/api/auth/github/callback`;
+}
 
+/**
+ * Stores OAuth state token with user information
+ * @param {string} state - CSRF state token
+ * @param {number} userId - User ID from JWT token
+ */
+function storeOAuthState(state, userId) {
+  oauthStates.set(state, {
+    userId,
+    createdAt: Date.now(),
+  });
+
+  console.log(`OAuth state stored: ${state} for user: ${userId}`);
+}
+
+// Step 2: Handle GitHub OAuth callback
+// ============================================
+// GITHUB OAUTH - CALLBACK HANDLER
+// ============================================
+
+/**
+ * Handles GitHub OAuth callback redirect
+ *
+ * Flow:
+ * 1. Validate CSRF state token
+ * 2. Exchange authorization code for access token
+ * 3. Fetch GitHub user information
+ * 4. Store data temporarily for frontend to complete integration
+ * 5. Redirect to frontend with flow_id
+ *
+ * Security:
+ * - CSRF state validation (prevents replay attacks)
+ * - State expiration check (10 minutes max)
+ * - Flow data expires after 5 minutes
+ */
 app.get("/api/auth/github/callback", async (req, res) => {
-  console.log("=== GitHub OAuth callback ===");
   try {
-    const { code, state, error } = req.query;
+    const { code, state } = req.query;
 
-    if (error) {
-      const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
-        error
-      )}`;
-      return res.redirect(errorUrl);
+    // ============================================
+    // VALIDATE CSRF STATE
+    // ============================================
+
+    const storedData = oauthStates.get(state);
+
+    if (!storedData) {
+      console.error("CSRF validation failed: state not found");
+      return redirectToFrontend(res, { error: "csrf_validation_failed" });
     }
 
-    if (!code || !state) {
-      const errorUrl = `http://localhost:5173/github-callback?error=missing_auth_data`;
-      return res.redirect(errorUrl);
+    // Validate state age (10 minutes maximum)
+    if (isStateExpired(storedData.createdAt)) {
+      oauthStates.delete(state);
+      console.error("CSRF validation failed: state expired");
+      return redirectToFrontend(res, { error: "state_expired" });
     }
 
-    // Use the code immediately (before it expires)
-    console.log("Exchanging code for token...");
+    // ============================================
+    // EXCHANGE CODE FOR ACCESS TOKEN
+    // ============================================
+
     const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
-
-    console.log("Getting GitHub user info...");
     const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
 
-    // Store the integration data temporarily with a unique key
-    const tempKey = `github_${Date.now()}_${Math.random()}`;
-    tempTokenStore.set(tempKey, {
-      githubUser: githubUser,
-      accessToken: tokenData.access_token,
-      createdAt: Date.now(),
-    });
+    console.log(
+      `GitHub user authenticated: ${githubUser.username} (User ID: ${storedData.userId})`
+    );
 
-    // Clean up old entries (older than 5 minutes)
-    for (let [key, value] of tempTokenStore.entries()) {
-      if (Date.now() - value.createdAt > 5 * 60 * 1000) {
-        tempTokenStore.delete(key);
-      }
-    }
+    // ============================================
+    // STORE TEMPORARY FLOW DATA
+    // ============================================
 
-    // Redirect with the temporary key instead of code/state
-    const callbackUrl = `http://localhost:5173/github-callback?success=true&username=${githubUser.username}&temp_key=${tempKey}`;
-    console.log("Redirecting to:", callbackUrl);
-
-    res.redirect(callbackUrl);
-  } catch (error) {
-    console.error("Error in GitHub OAuth callback:", error);
-    const errorUrl = `http://localhost:5173/github-callback?error=${encodeURIComponent(
-      error.message
-    )}`;
-    res.redirect(errorUrl);
-  }
-});
-
-// Step 3: Complete GitHub integration (called from frontend after callback)
-/* app.post("/api/integrations/github/connect", verifyToken, async (req, res) => {
-  console.log("=== CONNECT ENDPOINT CALLED ===");
-  console.log("Headers:", req.headers.authorization);
-  console.log("Body:", req.body);
-  console.log("User:", req.user);
-  try {
-    const { code, state } = req.body;
-
-    if (!code || !state) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing authorization code or state parameter",
-      });
-    }
-
-    // Exchange code for access token
-    const tokenData = await githubOAuth.exchangeCodeForToken(code, state);
-
-    // Get GitHub user information
-    const githubUser = await githubOAuth.getUserInfo(tokenData.access_token);
-
-    // Save integration to database
-    const integration = await GitHubDbHelpers.upsertGitHubIntegration(
-      req.user.userId,
+    const flowId = createOAuthFlow(
+      storedData.userId,
       githubUser,
       tokenData.access_token
     );
 
-    res.json({
+    // Clean up used state immediately
+    oauthStates.delete(state);
+
+    // Clean up expired flows
+    cleanupExpiredFlows();
+
+    // ============================================
+    // REDIRECT TO FRONTEND
+    // ============================================
+
+    return redirectToFrontend(res, {
       success: true,
-      message: "GitHub integration successful",
-      data: {
-        integration_id: integration.id,
-        github_username: githubUser.username,
-        avatar_url: githubUser.avatar_url,
-        connected_at: integration.created_at,
-      },
+      username: githubUser.username,
+      flow_id: flowId,
     });
   } catch (error) {
-    console.error("Error connecting GitHub integration:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to connect GitHub integration",
+    console.error("GitHub OAuth callback failed:", {
+      message: error.message,
+      stack: error.stack,
     });
-  }
-}); */
 
-// Updated connect endpoint
-app.post("/api/integrations/github/connect", verifyToken, async (req, res) => {
-  console.log("=== Connect endpoint called ===");
-  try {
-    const { temp_key } = req.body;
-
-    if (!temp_key) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing temporary key",
-      });
-    }
-
-    // Retrieve stored data
-    const storedData = tempTokenStore.get(temp_key);
-    if (!storedData) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid or expired temporary key",
-      });
-    }
-
-    // Remove from temporary storage
-    tempTokenStore.delete(temp_key);
-
-    // Save to database
-    console.log("Saving integration to database...");
-    const integration = await GitHubDbHelpers.upsertGitHubIntegration(
-      req.user.userId,
-      storedData.githubUser,
-      storedData.accessToken
-    );
-
-    console.log("Integration saved successfully:", integration.id);
-
-    res.json({
-      success: true,
-      message: "GitHub integration successful",
-      data: {
-        integration_id: integration.id,
-        github_username: storedData.githubUser.username,
-        avatar_url: storedData.githubUser.avatar_url,
-        connected_at: integration.created_at,
-      },
-    });
-  } catch (error) {
-    console.error("Error in connect endpoint:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to connect GitHub integration",
-      debug_error: error.message,
+    return redirectToFrontend(res, {
+      error: encodeURIComponent(error.message),
     });
   }
 });
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Configuration constants
+ */
+const OAUTH_CONFIG = {
+  STATE_EXPIRY_MS: 10 * 60 * 1000, // 10 minutes
+  FLOW_EXPIRY_MS: 5 * 60 * 1000, // 5 minutes
+  FRONTEND_CALLBACK_URL: process.env.FRONTEND_URL
+    ? `${process.env.FRONTEND_URL}/github-callback`
+    : "http://localhost:5173/github-callback",
+};
+
+/**
+ * Checks if OAuth state has expired
+ * @param {number} createdAt - Timestamp when state was created
+ * @returns {boolean} True if expired
+ */
+function isStateExpired(createdAt) {
+  const age = Date.now() - createdAt;
+  return age > OAUTH_CONFIG.STATE_EXPIRY_MS;
+}
+
+/**
+ * Creates and stores temporary OAuth flow data
+ * @param {number} userId - User ID from original state
+ * @param {Object} githubUser - GitHub user information
+ * @param {string} accessToken - GitHub access token
+ * @returns {string} Unique flow ID
+ */
+function createOAuthFlow(userId, githubUser, accessToken) {
+  const flowId = crypto.randomBytes(16).toString("hex");
+  const now = Date.now();
+
+  completedOAuthFlows.set(flowId, {
+    userId,
+    githubUser,
+    accessToken,
+    createdAt: now,
+    expiresAt: now + OAUTH_CONFIG.FLOW_EXPIRY_MS,
+  });
+
+  return flowId;
+}
+
+/**
+ * Removes expired OAuth flows from memory
+ * Called after each callback to prevent memory leaks
+ */
+/**
+ * Removes expired OAuth flows from memory
+ * Should be called periodically to prevent memory leaks
+ *
+ * Performance: O(n) where n is the number of stored flows
+ * Memory: Efficiently removes entries during iteration
+ */
+function cleanupExpiredFlows() {
+  const now = Date.now();
+  let cleanedCount = 0;
+
+  for (const [flowId, data] of completedOAuthFlows.entries()) {
+    if (now > data.expiresAt) {
+      completedOAuthFlows.delete(flowId);
+      cleanedCount++;
+    }
+  }
+
+  if (cleanedCount > 0) {
+    console.log(`Cleaned up ${cleanedCount} expired OAuth flow(s)`);
+  }
+}
+
+/**
+ * Redirects to frontend with query parameters
+ * @param {Response} res - Express response object
+ * @param {Object} params - Query parameters to append
+ */
+function redirectToFrontend(res, params) {
+  const url = new URL(OAUTH_CONFIG.FRONTEND_CALLBACK_URL);
+
+  Object.entries(params).forEach(([key, value]) => {
+    url.searchParams.append(key, value);
+  });
+
+  res.redirect(url.toString());
+}
+
+// Step 3: Complete GitHub integration (called from frontend after callback)
+// Updated connect endpoint
+// ============================================
+// GITHUB OAUTH CONNECTION ENDPOINT
+// ============================================
+
+/**
+ * Completes the GitHub OAuth integration flow
+ * This endpoint is called by the frontend after the OAuth callback redirect
+ *
+ * Flow:
+ * 1. User initiates OAuth at /api/auth/github
+ * 2. GitHub redirects to /api/auth/github/callback
+ * 3. Callback creates temporary flow data and redirects to frontend
+ * 4. Frontend calls this endpoint with flow_id to complete integration
+ */
+app.post("/api/integrations/github/connect", verifyToken, async (req, res) => {
+  const { flow_id } = req.body;
+
+  // ============================================
+  // INPUT VALIDATION
+  // ============================================
+
+  if (!flow_id) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing flow_id parameter",
+    });
+  }
+
+  // ============================================
+  // RETRIEVE AND VALIDATE OAUTH FLOW
+  // ============================================
+
+  const oauthData = completedOAuthFlows.get(flow_id);
+
+  if (!oauthData) {
+    return res.status(400).json({
+      success: false,
+      error: "OAuth flow not found or expired. Please try connecting again.",
+    });
+  }
+
+  // Delete immediately to free memory - do this early in all code paths
+  completedOAuthFlows.delete(flow_id);
+
+  // Verify flow ownership - prevent flow hijacking
+  if (oauthData.userId !== req.user.userId) {
+    return res.status(403).json({
+      success: false,
+      error: "OAuth flow does not belong to this user",
+    });
+  }
+
+  // Check expiration - additional security layer beyond cleanup job
+  if (Date.now() > oauthData.expiresAt) {
+    return res.status(400).json({
+      success: false,
+      error: "OAuth flow has expired. Please try connecting again.",
+    });
+  }
+
+  // ============================================
+  // SAVE INTEGRATION TO DATABASE
+  // ============================================
+
+  try {
+    const { githubUser, accessToken } = oauthData;
+
+    const integration = await GitHubDbHelpers.upsertGitHubIntegration(
+      req.user.userId,
+      githubUser,
+      accessToken
+    );
+
+    // Return minimal response data
+    return res.json({
+      success: true,
+      data: {
+        id: integration.id,
+        github_username: integration.github_username,
+        connected_at: integration.created_at,
+      },
+    });
+  } catch (error) {
+    console.error("GitHub integration save failed:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: "Failed to connect GitHub integration",
+    });
+  }
+});
+
+// Cleanup function for expired flows
+function cleanupExpiredFlows() {
+  const now = Date.now();
+  for (const [flowId, data] of completedOAuthFlows.entries()) {
+    if (now > data.expiresAt) {
+      completedOAuthFlows.delete(flowId);
+      console.log("Cleaned up expired OAuth flow:", flowId);
+    }
+  }
+}
+
+// Run cleanup every minute
+setInterval(cleanupExpiredFlows, 60 * 1000);
 
 // ======================
 // GITHUB INTEGRATION MANAGEMENT
