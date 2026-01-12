@@ -24,13 +24,13 @@ const GitHubCallback = () => {
 
       const success = searchParams.get("success");
       const error = searchParams.get("error");
-      const tempKey = searchParams.get("temp_key");
+      const flow_id = searchParams.get("flow_id");
       const username = searchParams.get("username");
 
       console.log("Callback params:", {
         success,
         error,
-        tempKey: !!tempKey,
+        flow_id: !!flow_id,
         username,
         token: !!token,
       });
@@ -40,7 +40,7 @@ const GitHubCallback = () => {
         return;
       }
 
-      if (success && tempKey && token) {
+      if (success && flow_id && token) {
         try {
           console.log("Calling connect API with temp key...");
           setStatus("connecting");
@@ -53,7 +53,7 @@ const GitHubCallback = () => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
               },
-              body: JSON.stringify({ temp_key: tempKey }),
+              body: JSON.stringify({ flow_id: flow_id }),
             }
           );
 
@@ -81,7 +81,7 @@ const GitHubCallback = () => {
       } else {
         console.log("Missing required data:", {
           success,
-          tempKey: !!tempKey,
+          tempKey: !!flow_id,
           token: !!token,
         });
         navigate("/integrations/github?error=missing_data");

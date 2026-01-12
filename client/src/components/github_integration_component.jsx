@@ -128,6 +128,9 @@ const GitHubIntegrationComponent = () => {
 
   // Initialize component
   useEffect(() => {
+    console.log(
+      "🚀 ~ GitHubIntegrationComponent ~ useEffect: Initialize component"
+    );
     const initialize = async () => {
       setLoading(true);
       await Promise.all([fetchIntegrationStatus(), fetchProjects()]);
@@ -159,7 +162,7 @@ const GitHubIntegrationComponent = () => {
       const result = await response.json();
       if (result.success) {
         // Redirect to Github, OAuth;
-        window.location.href = result.data.authorization_url;
+        window.location.href = result.authorization_url;
       } else {
         throw new Error(result.error);
       }
