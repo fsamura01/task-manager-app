@@ -1,3 +1,10 @@
+---
+title: Task Manager - Backend API
+description: Express-based backend for the Task Manager application, providing a secure API for task and project management.
+type: backend
+tech_stack: [Node.js, Express, PostgreSQL, JWT, WebSockets]
+---
+
 # Task Manager - Backend API
 
 This is the Express-based backend for the Task Manager application, providing a secure and scalable API for task and project management.

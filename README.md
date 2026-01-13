@@ -1,3 +1,10 @@
+---
+title: Task Manager App
+description: A full-stack project-based task management application built with React, Node.js, and PostgreSQL.
+type: project-root
+tech_stack: [React, Node.js, Express, PostgreSQL, WebSockets]
+---
+
 # Task Manager App
 
 A full-stack project-based task management application built with a modern tech stack (React, Node.js, Express, PostgreSQL). This app allows users to organize tasks within projects, manage authentication, and handle file uploads.

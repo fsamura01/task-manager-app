@@ -1,3 +1,10 @@
+---
+title: Task Manager - Frontend
+description: React-based frontend for the Task Manager application, built with Vite.
+type: frontend
+tech_stack: [React, Vite, Lucide Icons, WebSockets]
+---
+
 # Task Manager - Frontend
 
 This is the React-based frontend for the Task Manager application, built with Vite for a fast development experience.
