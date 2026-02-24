@@ -72,7 +72,7 @@ class GitHubOAuthService {
 
       if (data.error) {
         throw new Error(
-          `GitHub OAuth error: ${data.error_description || data.error}`
+          `GitHub OAuth error: ${data.error_description || data.error}`,
         );
       }
 
@@ -85,7 +85,7 @@ class GitHubOAuthService {
     } catch (error) {
       console.error("Error exchanging code for token:", error);
       throw new Error(
-        `Failed to exchange authorization code: ${error.message}`
+        `Failed to exchange authorization code: ${error.message}`,
       );
     }
   }
@@ -110,7 +110,7 @@ class GitHubOAuthService {
         throw new Error(
           `GitHub API error: ${response.status} - ${
             errorData.message || "Unknown error"
-          }`
+          }`,
         );
       }
 
@@ -145,7 +145,7 @@ class GitHubOAuthService {
   async getUserRepositories(accessToken, options = {}) {
     console.log(
       "🚀 ~ GitHubOAuthService ~ getUserRepositories ~ accessToken:",
-      accessToken
+      accessToken,
     );
     try {
       const params = new URLSearchParams({
@@ -169,7 +169,7 @@ class GitHubOAuthService {
         throw new Error(
           `GitHub API error: ${response.status} - ${
             errorData.message || "Unknown error"
-          }`
+          }`,
         );
       }
 

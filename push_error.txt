@@ -1,0 +1,26 @@
+remote: error: GH013: Repository rule violations found for refs/heads/feature/error-handling-and-robustness.        
+remote: 
+remote: - GITHUB PUSH PROTECTION        
+remote:   ΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇö        
+remote:     Resolve the following violations before pushing again        
+remote: 
+remote:     - Push cannot contain secrets        
+remote: 
+remote:             
+remote:      (?) Learn how to resolve a blocked push        
+remote:      https://docs.github.com/code-security/secret-scanning/working-with-secret-scanning-and-push-protection/working-with-push-protection-from-the-command-line#resolving-a-blocked-push        
+remote:             
+remote:             
+remote:       ΓÇöΓÇö GitHub OAuth Access Token ΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇöΓÇö        
+remote:        locations:        
+remote:          - commit: a45f9ab60853e4a52a8c2a28dbb132427156ab03        
+remote:            path: server/task_manager.sql:246        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/fsamura01/task-manager-app/security/secret-scanning/unblock-secret/3A8NpYc4tmK1NkQEhp2JAI3CqNo        
+remote:             
+remote: 
+remote: 
+To https://github.com/fsamura01/task-manager-app.git
+ ! [remote rejected] feature/error-handling-and-robustness -> feature/error-handling-and-robustness (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/fsamura01/task-manager-app.git'

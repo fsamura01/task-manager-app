@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 
-const JWT_SECRET = process.env.JWT_SECRET || "your-fallback-secret-key";
+
 // Create different rate limiters for different types of endpoints
 const loginLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 15 minutes
@@ -23,16 +23,28 @@ const loginLimiter = rateLimit({
   },
 });
 
+const secret = process.env.JWT_SECRET || "your-fallback-secret-key";
 // Helper function to generate JWT tokens
 // Think of this like creating a secure ID badge with expiration date
 const generateToken = (userId, username) => {
+
+  const payload = {
+        userId: userId,
+        username: username,
+        // Including a timestamp helps with debugging and token lifecycle management
+        iat: Math.floor(Date.now() / 1000)
+  };
+  
+  const options = {
+        expiresIn: '24h',
+        issuer: 'Task-Manager-App',
+        audience: 'Task-Manager-App-Users'
+  };
+
   return jwt.sign(
-    {
-      userId: userId,
-      username: username,
-    },
-    JWT_SECRET,
-    { expiresIn: "24h" } // Token expires in 24 hours for security
+    payload,
+    secret,
+    options
   );
 };
 

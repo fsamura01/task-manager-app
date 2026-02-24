@@ -5,43 +5,46 @@ const path = require("path");
 const fs = require("fs-extra");
 
 // Define where files will be stored and how they'll be named
+/**
+ * Multer Storage Configuration
+ * This tells Multer: 1. Where to put the file, and 2. What to call it.
+ * Behind the scenes, Multer will join these two results to create 'req.file.path'.
+ */
 const storage = multer.diskStorage({
+  // 'destination' determines the folder path
   destination: async function (req, file, cb) {
-    // Create uploads directory structure: uploads/YYYY/MM/
+    // We organize files by date: uploads/2026/02/
     const now = new Date();
     const year = now.getFullYear();
     const month = (now.getMonth() + 1).toString().padStart(2, "0");
     const uploadPath = path.join("uploads", year.toString(), month);
 
     try {
-      // Ensure the directory exists, create it if it doesn't
+      // Junior Note: 'fs-extra' ensureDir checks if the folder exists, 
+      // and creates it automatically if it's missing.
       await fs.ensureDir(uploadPath);
-      console.log(`Upload directory ensured: ${uploadPath}`);
-      cb(null, uploadPath);
+      cb(null, uploadPath); // Success! Tell Multer the folder is ready.
     } catch (error) {
-      console.error("Error creating upload directory:", error);
-      cb(error);
+      cb(error); // Something went wrong with the hard drive.
     }
   },
 
+  // 'filename' determines the name of the file on the disk
   filename: function (req, file, cb) {
-    // Generate a unique filename to prevent conflicts
-    // Format: timestamp-randomhex.originalextension
-    const uniqueSuffix =
-      Date.now() + "-" + crypto.randomBytes(8).toString("hex");
+    // Why not use the original name? 
+    // Because if two users upload "resume.pdf", one would overwrite the other.
+    // We add a timestamp and random characters to make every filename 100% unique.
+    const uniqueSuffix = Date.now() + "-" + crypto.randomBytes(8).toString("hex");
     const fileExtension = path.extname(file.originalname).toLowerCase();
     const secureFilename = `${uniqueSuffix}${fileExtension}`;
 
-    console.log(
-      `Generated secure filename: ${secureFilename} for original: ${file.originalname}`
-    );
-    cb(null, secureFilename);
+    cb(null, secureFilename); // Success! Tell Multer the unique name.
   },
 });
 
 // Define file filtering logic - this acts as a security gatekeeper
 const fileFilter = function (req, file, cb) {
-  console.log(`Processing file: ${file.originalname}, type: ${file.mimetype}`);
+  console.log(`[DEBUG: Multer] 🛡️ Validating file: ${file.originalname} (MIME: ${file.mimetype})`);
 
   // Define allowed file types - customize this based on your needs
   const allowedMimeTypes = [
@@ -99,11 +102,11 @@ const fileFilter = function (req, file, cb) {
   const extensionValid = allowedExtensions.includes(fileExtension);
 
   if (mimeTypeValid && extensionValid) {
-    console.log(`File validation passed for: ${file.originalname}`);
+    console.log(`[DEBUG: Multer] ✅ Validation PASSED for: ${file.originalname}`);
     cb(null, true);
   } else {
     console.log(
-      `File validation failed for: ${file.originalname}. MIME: ${file.mimetype}, Extension: ${fileExtension}`
+      `[DEBUG: Multer] ⛔ Validation FAILED for: ${file.originalname}. MIME: ${file.mimetype}, Extension: ${fileExtension}`
     );
     cb(
       new Error(
