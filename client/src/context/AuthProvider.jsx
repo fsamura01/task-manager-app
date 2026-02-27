@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AuthContext } from "../hooks/use_auth";
 import { api } from "../utils/api";
+import { useNotification } from "./NotificationContext";
 
 /**
  * Authentication Context Provider
@@ -9,6 +10,7 @@ const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { showNotification } = useNotification();
 
   useEffect(() => {
     const initializeAuth = async () => {
@@ -30,6 +32,15 @@ const AuthProvider = ({ children }) => {
     initializeAuth();
   }, []);
 
+  // Helper: always returns a plain string from any error type
+  const getErrorMessage = (error) => {
+    if (typeof error.message === "string") return error.message;
+    if (typeof error.message === "object" && error.message !== null) {
+      return error.message.message || error.message.error || JSON.stringify(error.message);
+    }
+    return "An unexpected error occurred";
+  };
+
   const login = async (username, password) => {
     try {
       const result = await api.post("/auth/login", { username, password });
@@ -37,18 +48,22 @@ const AuthProvider = ({ children }) => {
       setUser(result.data.user);
       setToken(result.data.token);
       localStorage.setItem("token", result.data.token);
+      showNotification(`Welcome back, ${result.data.user.name || result.data.user.username}!`, "success");
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      showNotification(getErrorMessage(error), "danger");
+      return { success: false, error: getErrorMessage(error) };
     }
   };
 
   const register = async (username, email, password, name) => {
     try {
       const result = await api.post("/auth/register", { username, email, password, name });
+      showNotification("Account created! You can now log in.", "success");
       return { success: true, data: result.data };
     } catch (error) {
-      return { success: false, error: error.message };
+      showNotification(getErrorMessage(error), "danger");
+      return { success: false, error: getErrorMessage(error) };
     }
   };
 

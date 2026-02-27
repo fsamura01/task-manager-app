@@ -8,6 +8,7 @@ import { Toast, ToastContainer } from 'react-bootstrap';
  */
 
 const NotificationContext = createContext();
+console.log("🚀 ~ NotificationContext:", NotificationContext)
 
 export const useNotification = () => {
   const context = useContext(NotificationContext);
