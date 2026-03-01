@@ -11,7 +11,7 @@ class GitHubOAuthService {
       process.env.GITHUB_API_BASE_URL || "https://api.github.com";
 
     if (!this.clientId || !this.clientSecret) {
-      throw new Error("GitHub OAuth credentials not configured");
+      console.warn("⚠️ GitHub OAuth credentials not configured. GitHub Integration will be disabled.");
     }
   }
 
