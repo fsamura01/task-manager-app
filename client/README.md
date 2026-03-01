@@ -44,6 +44,7 @@ The application is structured into functional components that manage specific pa
 - **React Hooks**: `useContext`, `useReducer`, `useState`, `useEffect`.
 - **Lucide React**: Icon library for a clean UI.
 - **WebSockets**: Real-time task status updates.
+- **Deployment**: Configured for continuous integration via **Vercel**.
 
 ### 🚦 Getting Started
 

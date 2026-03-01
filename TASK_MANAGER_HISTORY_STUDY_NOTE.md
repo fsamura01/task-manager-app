@@ -547,6 +547,21 @@ Professional tests verify both the "Happy Paths" (✅) and the "Failures" (❌):
 - **Rate Limits**: We mocked `express-rate-limit` because running 50 tests in 2 seconds would normally trigger a native 429 Too Many Requests error!
 - **Assertions**: We explicitly assert that the API always returns the standard format produced by our Global Error Handler: `{ status: 'fail', message: '...' }`.
 
+### 🎯 4. Executing Specific Tests (Focusing Your Runs)
+
+When debugging or working on a single feature, running the entire test suite can be slow and overwhelming. Jest provides ways to run specific tests or suites from the command line without modifying your code.
+
+- **Running a Single Suite (File)**: Pass the path or filename directly to the test script.
+  ```bash
+  npm test -- __tests__/files.test.js
+  ```
+- **Running a Single Test Case**: Use the `-t` flag to match a specific `test("...")` description.
+  ```bash
+  npx jest __tests__/files.test.js -t "returns 404 when trying to delete"
+  ```
+  *⚠️ Gotcha: Be careful with emojis or special Unicode characters in terminal commands! Terminals can struggle to parse them. It's best to omit emojis and just use a partial text match string like above.*
+- **Using `.only`**: Alternatively, temporarily append `.only` in the code (`test.only(...)` or `describe.only(...)`) to isolate a block, though you must remember to remove it before committing.
+
 ---
 
 ## 🧪 18. Frontend Testing (Vitest & React Testing Library)

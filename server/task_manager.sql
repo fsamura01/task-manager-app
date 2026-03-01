@@ -1,3 +1,6 @@
+-- Create Schema
+CREATE SCHEMA IF NOT EXISTS "task_management";
+
 -- Sequence and defined type
 CREATE SEQUENCE IF NOT EXISTS users_id_seq;
 CREATE SEQUENCE IF NOT EXISTS projects_id_seq;
@@ -6,7 +9,7 @@ CREATE SEQUENCE IF NOT EXISTS github_integrations_id_seq;
 CREATE SEQUENCE IF NOT EXISTS tasks_id_seq;
 CREATE SEQUENCE IF NOT EXISTS github_repositories_id_seq;
 
-DROP TABLE IF EXISTS "task_management"."users";
+DROP TABLE IF EXISTS "task_management"."users" CASCADE;
 -- Table Definition
 CREATE TABLE "task_management"."users" (
     "id" int4 NOT NULL DEFAULT nextval('users_id_seq'::regclass),
@@ -26,7 +29,7 @@ CREATE UNIQUE INDEX users_email_key ON task_management.users USING btree (email)
 CREATE INDEX idx_users_email ON task_management.users USING btree (email);
 CREATE INDEX idx_users_username ON task_management.users USING btree (username);
 
-DROP TABLE IF EXISTS "task_management"."projects";
+DROP TABLE IF EXISTS "task_management"."projects" CASCADE;
 -- Table Definition
 CREATE TABLE "task_management"."projects" (
     "id" int4 NOT NULL DEFAULT nextval('projects_id_seq'::regclass),
@@ -44,7 +47,7 @@ CREATE TABLE "task_management"."projects" (
 CREATE INDEX idx_projects_user_id ON task_management.projects USING btree (user_id);
 CREATE INDEX idx_projects_name ON task_management.projects USING btree (name);
 
-DROP TABLE IF EXISTS "task_management"."files";
+DROP TABLE IF EXISTS "task_management"."files" CASCADE;
 -- Table Definition
 CREATE TABLE "task_management"."files" (
     "id" int4 NOT NULL DEFAULT nextval('files_id_seq'::regclass),
@@ -91,7 +94,7 @@ CREATE INDEX idx_files_deleted_at ON task_management.files USING btree (deleted_
 CREATE INDEX idx_files_s3_key ON task_management.files USING btree (s3_key);
 CREATE INDEX idx_files_storage_provider ON task_management.files USING btree (storage_provider);
 
-DROP TABLE IF EXISTS "task_management"."github_integrations";
+DROP TABLE IF EXISTS "task_management"."github_integrations" CASCADE;
 -- Table Definition
 CREATE TABLE "task_management"."github_integrations" (
     "id" int4 NOT NULL DEFAULT nextval('github_integrations_id_seq'::regclass),
@@ -117,7 +120,7 @@ CREATE INDEX idx_github_integrations_user_id ON task_management.github_integrati
 CREATE UNIQUE INDEX github_integrations_user_id_github_user_id_key ON task_management.github_integrations USING btree (user_id, github_user_id);
 CREATE INDEX idx_github_integrations_github_user_id ON task_management.github_integrations USING btree (github_user_id);
 
-DROP TABLE IF EXISTS "task_management"."tasks";
+DROP TABLE IF EXISTS "task_management"."tasks" CASCADE;
 -- Table Definition
 CREATE TABLE "task_management"."tasks" (
     "id" int4 NOT NULL DEFAULT nextval('tasks_id_seq'::regclass),
@@ -153,7 +156,7 @@ CREATE INDEX idx_tasks_title_trgm ON task_management.tasks USING gin (title gin_
 CREATE INDEX idx_tasks_description_trgm ON task_management.tasks USING gin (description gin_trgm_ops);
 CREATE INDEX idx_tasks_user_id_title ON task_management.tasks USING btree (user_id, title);
 
-DROP TABLE IF EXISTS "task_management"."github_repositories";
+DROP TABLE IF EXISTS "task_management"."github_repositories" CASCADE;
 -- Table Definition
 CREATE TABLE "task_management"."github_repositories" (
     "id" int4 NOT NULL DEFAULT nextval('github_repositories_id_seq'::regclass),
@@ -184,14 +187,14 @@ INSERT INTO "task_management"."projects" ("id", "name", "description", "user_id"
 (1, 'Implement Handling', 'Implement comprehensive error handling throughout the application', 1, '2026-02-23 13:23:23.523952', '2026-02-23 13:23:23.523952'),
 (2, 'Write  Testing', 'Write basic tests for your API endpoints using a framework like Jest', 1, '2026-02-23 13:47:38.726907', '2026-02-23 13:47:38.726907'),
 (3, 'Deploy your application', 'Deploy your application to a service like Heroku, Vercel, or DigitalOcean', 1, '2026-02-23 13:52:59.596202', '2026-02-25 10:23:41.068172');
-INSERT INTO "task_management"."files" ("id", "filename", "stored_filename", "file_path", "file_size", "mime_type", "file_extension", "upload_hash", "is_validated", "user_id", "task_id", "project_id", "created_at", "updated_at", "deleted_at", "s3_key", "s3_url", "storage_provider") VALUES
-(1, 'Mass General Brigham Patient Gateway - Medical and Family History.pdf', '1771881671975-f25cdf68e951500e.pdf', 'uploads/2026/02/1771881671975-f25cdf68e951500e.pdf', 98303, 'application/pdf', '.pdf', '24dc37087709c8c705d370bbfaf9df90', 't', 1, 1, 1, '2026-02-23 16:38:36.53409', '2026-02-23 16:38:36.53409', NULL, NULL, NULL, 'local'),
-(2, 'Comprehensive Mortgage Payment Documentation System.pdf', '1771943235156-e5f05e48af77dada.pdf', 'uploads/2026/02/1771943235156-e5f05e48af77dada.pdf', 766773, 'application/pdf', '.pdf', 'e209606cca2542398dbee2be8fe5e7c2', 't', 1, 2, 1, '2026-02-24 09:32:45.469875', '2026-02-24 09:32:45.469875', NULL, NULL, NULL, 'local'),
-(3, 'Samura_Foday.jpg', '1771944620164-72c7df45c9c04638.jpg', 'uploads/2026/02/1771944620164-72c7df45c9c04638.jpg', 26619, 'image/jpeg', '.jpg', 'f6bcdc434bc0bb2513c31c78268113b7', 't', 1, 2, 1, '2026-02-24 09:50:20.251317', '2026-02-24 09:50:20.251317', NULL, NULL, NULL, 'local');
-
 INSERT INTO "task_management"."tasks" ("id", "title", "description", "completed", "user_id", "created_at", "updated_at", "due_date", "project_id", "github_issue_id", "github_issue_number", "github_repo_name", "github_issue_url", "github_labels", "github_state", "github_assignees", "synced_from_github", "last_github_sync") VALUES
 (1, 'Error classes', 'Create custom error classes for different types of failures and consistent error responses from your API.', 't', 1, '2026-02-23 15:45:48.467517', '2026-02-27 15:45:46.085495', '2026-03-14 04:00:00', 1, NULL, NULL, NULL, NULL, '[]', NULL, '[]', 'f', NULL),
 (2, 'Error boundaries and user-friendly error message', 'On the frontend, create error boundaries and user-friendly error messages that help users understand what went wrong and how to fix it', 't', 1, '2026-02-23 15:58:46.630357', '2026-02-27 15:44:02.541685', '2026-03-21 04:00:00', 1, NULL, NULL, NULL, NULL, '[]', NULL, '[]', 'f', NULL),
 (3, 'Write Test Cases', 'Write basic tests for your API endpoints using a framework like Jest. Testing teaches you to think about edge cases and helps you catch regressions as you make changes to your code.', 'f', 1, '2026-02-27 15:46:46.409741', '2026-02-27 15:46:46.409741', '2026-03-14 00:00:00', 1, NULL, NULL, NULL, NULL, '[]', NULL, '[]', 'f', NULL),
 (4, 'Deployment', 'Deploy your application to a service like Heroku, Vercel, or DigitalOcean', 'f', 1, '2026-02-27 15:52:36.003585', '2026-02-27 15:52:36.003585', '2026-03-14 00:00:00', 1, NULL, NULL, NULL, NULL, '[]', NULL, '[]', 'f', NULL);
+
+INSERT INTO "task_management"."files" ("id", "filename", "stored_filename", "file_path", "file_size", "mime_type", "file_extension", "upload_hash", "is_validated", "user_id", "task_id", "project_id", "created_at", "updated_at", "deleted_at", "s3_key", "s3_url", "storage_provider") VALUES
+(1, 'Mass General Brigham Patient Gateway - Medical and Family History.pdf', '1771881671975-f25cdf68e951500e.pdf', 'uploads/2026/02/1771881671975-f25cdf68e951500e.pdf', 98303, 'application/pdf', '.pdf', '24dc37087709c8c705d370bbfaf9df90', 't', 1, 1, 1, '2026-02-23 16:38:36.53409', '2026-02-23 16:38:36.53409', NULL, NULL, NULL, 'local'),
+(2, 'Comprehensive Mortgage Payment Documentation System.pdf', '1771943235156-e5f05e48af77dada.pdf', 'uploads/2026/02/1771943235156-e5f05e48af77dada.pdf', 766773, 'application/pdf', '.pdf', 'e209606cca2542398dbee2be8fe5e7c2', 't', 1, 2, 1, '2026-02-24 09:32:45.469875', '2026-02-24 09:32:45.469875', NULL, NULL, NULL, 'local'),
+(3, 'Samura_Foday.jpg', '1771944620164-72c7df45c9c04638.jpg', 'uploads/2026/02/1771944620164-72c7df45c9c04638.jpg', 26619, 'image/jpeg', '.jpg', 'f6bcdc434bc0bb2513c31c78268113b7', 't', 1, 2, 1, '2026-02-24 09:50:20.251317', '2026-02-24 09:50:20.251317', NULL, NULL, NULL, 'local');
 

@@ -17,7 +17,8 @@ The server is built with Node.js and Express, following a modular structure for 
 - **`middleware/`**: Custom logic for authentication (`verifyToken`), file uploads, and request limiting.
 - **`services/`**: External API integrations (e.g., GitHub API/OAuth).
 - **`utils/`**: Helper functions for database operations, JWT generation, and hashing.
-- **`database.js`**: PostgreSQL connection pooling and test logic.
+- **`database.js`**: PostgreSQL connection pooling pointing to a **Neon.tech** or local database.
+- **Deployment**: Designed to be hosted on serverless/container platforms like **Render.com** or Railway.
 
 ### 📡 API Endpoints
 

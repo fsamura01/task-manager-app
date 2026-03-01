@@ -13,9 +13,9 @@ A full-stack project-based task management application built with a modern tech 
 
 The application follows a standard client-server architecture:
 
-- **Frontend (Client)**: A React application built with Vite, handling the user interface, state management, and API communication.
-- **Backend (Server)**: An Express.js server providing RESTful API endpoints, handling authentication, data persistence, and file management.
-- **Database**: PostgreSQL for structured data storage (Users, Projects, Tasks).
+- **Frontend (Client)**: A React application built with Vite, handling the UI, state, and API communication. (Target Deployment: **Vercel**)
+- **Backend (Server)**: An Express.js server providing RESTful API endpoints, handling authentication, and data persistence. (Target Deployment: **Render** or Railway)
+- **Database**: PostgreSQL for structured data storage (Users, Projects, Tasks). (Target Deployment: **Neon** Serverless Postgres)
 - **Storage**: Local file storage (with middleware prepared for S3) for uploaded files.
 
 ### 🔄 Logic Flow
