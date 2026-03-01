@@ -48,7 +48,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage: multerS3({
     s3: s3Client,
-    bucket: process.env.S3_BUCKET_NAME,
+    bucket: process.env.S3_BUCKET_NAME || "unconfigured-bucket",
     acl: "private", // Files are private by default
     key: function (req, file, cb) {
       // Create unique filename with timestamp and random string

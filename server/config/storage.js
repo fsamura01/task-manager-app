@@ -6,7 +6,7 @@ const STORAGE_STRATEGIES = {
   LOCAL: "local"
 };
 
-const activeStrategy = process.env.STORAGE_STRATEGY || STORAGE_STRATEGIES.S3;
+const activeStrategy = process.env.STORAGE_STRATEGY || STORAGE_STRATEGIES.LOCAL;
 
 const activeUpload = activeStrategy === STORAGE_STRATEGIES.LOCAL 
   ? localStorage.upload 
