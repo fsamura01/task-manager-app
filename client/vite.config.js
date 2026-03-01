@@ -15,4 +15,9 @@ export default defineConfig({
       },
     },
   },
+  test: {
+    environment: 'jsdom', // Simulates a browser environment for React components
+    setupFiles: ['./src/setupTests.js'], // Runs standard setup before tests
+    globals: true, // Allows us to use describe, it, expect without importing them everywhere
+  },
 })

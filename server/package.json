@@ -4,9 +4,22 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "cross-env NODE_ENV=test jest --verbose --forceExit",
+    "test:watch": "cross-env NODE_ENV=test jest --watch --verbose",
     "start": "node app.js",
     "dev": "nodemon app.js"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/__tests__/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "controllers/**/*.js",
+      "middleware/**/*.js",
+      "models/**/*.js",
+      "routes/**/*.js"
+    ]
   },
   "keywords": [],
   "author": "",
@@ -33,6 +46,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.15.4",
+    "cross-env": "^10.1.0",
     "jest": "^30.0.5",
     "nodemon": "^3.1.10",
     "supertest": "^7.1.3"
