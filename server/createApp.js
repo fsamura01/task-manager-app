@@ -23,6 +23,9 @@ const { NotFoundError } = require("./utils/app_error");
 
 function createApp() {
   const app = express();
+  
+  // Trust the reverse proxy (Render) so req.protocol is correctly 'https'
+  app.set("trust proxy", 1);
 
   // 1. GLOBAL MIDDLEWARE
   // Disable morgan logging during tests to keep output clean
