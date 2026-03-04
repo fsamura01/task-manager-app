@@ -34,7 +34,7 @@ import { useNavigate } from "react-router-dom";
 import GithubIcon from "../components/common/GithubIcon";
 import { useAuth } from "../hooks/use_auth";
 
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL = "/api";
 
 /**
  * GitHub Integration Management Component

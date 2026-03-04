@@ -1,36 +1,36 @@
 import {
-  ArrowRight,
-  Calendar,
-  CheckCircle,
-  Edit,
-  FolderOpen,
-  Plus,
-  Search,
-  Trash2,
-  Upload,
-  X,
+    ArrowRight,
+    Calendar,
+    CheckCircle,
+    Edit,
+    FolderOpen,
+    Plus,
+    Search,
+    Trash2,
+    Upload,
+    X,
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Col,
-  Collapse,
-  Container,
-  Form,
-  Modal,
-  ProgressBar,
-  Row,
-  Spinner,
+    Alert,
+    Badge,
+    Button,
+    Card,
+    Col,
+    Collapse,
+    Container,
+    Form,
+    Modal,
+    ProgressBar,
+    Row,
+    Spinner,
 } from "react-bootstrap";
 import { useNavigate } from "react-router-dom";
 import StatsOverview from "../components/features/dashboard/StatsOverview";
 import FileUploadComponent from "../components/features/files/FileUpload"; // Your file upload component
 import { useAuth } from "../hooks/use_auth";
 
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL = "/api";
 
 /**
  * Projects Dashboard: The "Command Center"

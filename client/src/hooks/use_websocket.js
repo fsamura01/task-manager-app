@@ -29,7 +29,11 @@ export const useWebSocket = (token, projectId) => {
      * Step 1: Initialize the Socket Instance
      * Think of this as dialing the server's phone number.
      */
-    const socketInstance = io("http://localhost:5000", {
+    const wsUrl = import.meta.env.PROD
+      ? "https://task-manager-api-8uzs.onrender.com"
+      : "http://localhost:5000";
+
+    const socketInstance = io(wsUrl, {
       auth: { token }, // Include our keycard in the initial handshake
       transports: ["websocket", "polling"], // Try fast way first, then fallback
       reconnectionAttempts: 5,
