@@ -1,29 +1,29 @@
 import {
-    ArrowRight,
-    Calendar,
-    CheckCircle,
-    Edit,
-    FolderOpen,
-    Plus,
-    Search,
-    Trash2,
-    Upload,
-    X,
+  ArrowRight,
+  Calendar,
+  CheckCircle,
+  Edit,
+  FolderOpen,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  X,
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import {
-    Alert,
-    Badge,
-    Button,
-    Card,
-    Col,
-    Collapse,
-    Container,
-    Form,
-    Modal,
-    ProgressBar,
-    Row,
-    Spinner,
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Collapse,
+  Container,
+  Form,
+  Modal,
+  ProgressBar,
+  Row,
+  Spinner,
 } from "react-bootstrap";
 import { useNavigate } from "react-router-dom";
 import StatsOverview from "../components/features/dashboard/StatsOverview";
@@ -87,10 +87,10 @@ const ProjectsDashboard = () => {
       setError(null);
 
       // Build the URL with an optional ?search=... filter
-      const url = new URL(`${API_BASE_URL}/projects/with-tasks`);
-      if (query.trim()) url.searchParams.append("search", query.trim());
+      let endpoint = `${API_BASE_URL}/projects/with-tasks`;
+      if (query.trim()) endpoint += `?search=${encodeURIComponent(query.trim())}`;
 
-      const response = await fetch(url.toString(), {
+      const response = await fetch(endpoint, {
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`, // Tell the server who we are
