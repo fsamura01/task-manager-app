@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://task-manager-api-8uzs.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
