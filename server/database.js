@@ -11,12 +11,6 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
-// Set search_path on each new connection so bare table names
-// (e.g. "users") resolve to the task_management schema on Neon.
-pool.on('connect', (client) => {
-  client.query('SET search_path TO task_management, public');
-});
-
 // Helper function to run queries with error handling
 const query = async (text, params) => {
   const start = Date.now();
