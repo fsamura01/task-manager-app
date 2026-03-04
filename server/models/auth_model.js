@@ -10,14 +10,9 @@ class AuthenticationDbHelper {
    * @throws {Error} If the database query fails.
    */
   static async login(identifier) {
-    try {
-      const query = `SELECT id, username, email, password_hash, name FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`;
-      const user = await db.query(query, [identifier]);
-      return user.rows;
-    } catch (error) {
-      console.error("Login error:", error);
-      throw new Error("Failed to login");
-    }
+    const query = `SELECT id, username, email, password_hash, name FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)`;
+    const user = await db.query(query, [identifier]);
+    return user.rows;
   }
 
   /**
@@ -31,15 +26,10 @@ class AuthenticationDbHelper {
    * @throws {Error} If the username or email already exists or the query fails.
    */
   static async getExistingUser(username, email) {
-    try {
-      const query = `SELECT id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)`;
-      const existingUser = await db.query(query, [username, email]);
+    const query = `SELECT id FROM users WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($2)`;
+    const existingUser = await db.query(query, [username, email]);
 
-      return existingUser.rows;
-    } catch (error) {
-      console.error("Failed to check existing user:", error);
-      throw new Error("Failed to check existing user");
-    }
+    return existingUser.rows;
   }
 
   /**
@@ -57,19 +47,14 @@ class AuthenticationDbHelper {
    * @throws {Error} If the database insert fails.
    */
   static async createNewUser(username, email, hashedPassword, displayName) {
-    try {
-      // Create the new user in database
-      const newUser = await db.query(
-        `INSERT INTO users (username, email, password_hash, name) VALUES ($1, $2, $3, $4) 
-         RETURNING id, username, email, name`,
-        [username, email, hashedPassword, displayName] // Using username as default name
-      );
+    // Create the new user in database
+    const newUser = await db.query(
+      `INSERT INTO users (username, email, password_hash, name) VALUES ($1, $2, $3, $4) 
+       RETURNING id, username, email, name`,
+      [username, email, hashedPassword, displayName] // Using username as default name
+    );
 
-      return newUser.rows;
-    } catch (error) {
-      console.error("Failed to create new user:", error);
-      throw new Error("Failed to create new user");
-    }
+    return newUser.rows;
   }
 }
 
