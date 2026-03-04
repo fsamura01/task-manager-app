@@ -8,8 +8,13 @@ const pool = new Pool({
   max: 10, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // How long a client can be idle before being closed
   connectionTimeoutMillis: 2000, // How long to wait when connecting
-  // Ensure queries resolve to the correct schema
-  options: '-c search_path=task_management,public',
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
+
+// Set search_path on each new connection so bare table names
+// (e.g. "users") resolve to the task_management schema on Neon.
+pool.on('connect', (client) => {
+  client.query('SET search_path TO task_management, public');
 });
 
 // Helper function to run queries with error handling
