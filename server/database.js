@@ -3,7 +3,7 @@ const { Pool } = require("pg");
 
 // Create a connection pool using environment variables
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || process.env.DB_URL,
   // These settings help manage connections efficiently
   max: 10, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000, // How long a client can be idle before being closed
