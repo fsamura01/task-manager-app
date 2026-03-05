@@ -22,7 +22,9 @@ const OAUTH_CONFIG = {
  * @description Initiates GitHub OAuth flow.
  */
 exports.initiateAuth = catchAsync(async (req, res, next) => {
-  const redirectUri = `${req.protocol}://${req.get("host")}/api/auth/github/callback`;
+  const backendBase = process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
+  const redirectUri = `${backendBase.replace(/\/$/, "")}/api/auth/github/callback`;
+  
   console.log("GitHub OAuth Redirect URI being sent:", redirectUri);
   const { url, state } = githubOAuth.generateAuthUrl(redirectUri);
 
