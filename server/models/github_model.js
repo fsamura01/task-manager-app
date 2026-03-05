@@ -283,6 +283,7 @@ class GitHubDbHelpers {
         open_tasks: parseInt(stats.open_tasks) || 0,
         closed_tasks: parseInt(stats.closed_tasks) || 0,
         last_sync: stats.last_sync,
+        connected: true,
       };
     } catch (error) {
       console.error("Error getting GitHub integration stats:", error);
