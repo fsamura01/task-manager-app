@@ -15,9 +15,7 @@ const completedOAuthFlows = new Map();
 const OAUTH_CONFIG = {
   STATE_EXPIRY_MS: 10 * 60 * 1000,
   FLOW_EXPIRY_MS: 5 * 60 * 1000,
-  FRONTEND_CALLBACK_URL: process.env.FRONTEND_URL
-    ? `${process.env.FRONTEND_URL}/github-callback`
-    : "http://localhost:3000/github-callback",
+  FRONTEND_CALLBACK_URL: (process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:3000").replace(/\/$/, "") + "/github-callback",
 };
 
 /**

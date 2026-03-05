@@ -25,3 +25,8 @@ Thumbs.db
 
 # uploads/
 uploads/
+
+# Development files
+*.sql
+*.txt
+
