@@ -31,40 +31,31 @@ import UserProfile from "./pages/ProfilePage";
 const AuthContent = () => {
   const { isAuthenticated } = useAuth();
 
-  if (!isAuthenticated) {
-    return <AuthScreen />;
-  }
-
   return (
     <div>
-      <AppNavbar />
-      {/* This is where we implement the nested routing structure */}
+      {isAuthenticated && <AppNavbar />}
       <Routes>
-        {/* Root route shows the projects dashboard */}
-        <Route path="/" element={<ProjectsDashboard />} />
-
-        {/* Projects route also shows the projects dashboard */}
-        <Route path="/projects" element={<ProjectsDashboard />} />
-
-        {/* Individual project route shows tasks scoped to that project */}
-        <Route path="/projects/:projectId/tasks" element={<TasksDashboard />} />
-
-        {/* Individual project route shows tasks scoped to that project */}
-        <Route path="/web-socket-test" element={<WebSocketTest />} />
-
-        {/* GitHub integrated component */}
-        <Route
-          path="/integrations/github"
-          element={<GitHubIntegrationComponent />}
-        />
-
-        <Route path="/github-callback" element={<GitHubCallback />} />
+        {/* Routes accessible only when authenticated */}
+        {isAuthenticated ? (
+          <>
+            <Route path="/" element={<ProjectsDashboard />} />
+            <Route path="/projects" element={<ProjectsDashboard />} />
+            <Route path="/projects/:projectId/tasks" element={<TasksDashboard />} />
+            <Route path="/web-socket-test" element={<WebSocketTest />} />
+            <Route path="/integrations/github" element={<GitHubIntegrationComponent />} />
+            <Route path="/profile" element={<UserProfile />} />
+            <Route path="*" element={<ProjectsDashboard />} />
+          </>
+        ) : (
+          <>
+            {/* Routes accessible when NOT authenticated */}
+            <Route path="/github-callback" element={<GitHubCallback />} />
+            <Route path="*" element={<AuthScreen />} />
+          </>
+        )}
         
-        {/* User profile route */}
-         <Route path="/profile" element={<UserProfile />} />
-
-        {/* Fallback route for any unmatched paths */}
-        <Route path="*" element={<ProjectsDashboard />} />
+        {/* Routes accessible always (e.g. debugging or universal callbacks) */}
+        <Route path="/github-callback" element={<GitHubCallback />} />
       </Routes>
     </div>
   );

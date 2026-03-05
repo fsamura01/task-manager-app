@@ -23,6 +23,7 @@ const OAUTH_CONFIG = {
  */
 exports.initiateAuth = catchAsync(async (req, res, next) => {
   const redirectUri = `${req.protocol}://${req.get("host")}/api/auth/github/callback`;
+  console.log("GitHub OAuth Redirect URI being sent:", redirectUri);
   const { url, state } = githubOAuth.generateAuthUrl(redirectUri);
 
   oauthStates.set(state, { userId: req.user.userId, createdAt: Date.now() });
