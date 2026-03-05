@@ -67,4 +67,18 @@ This document records the major hurdles encountered while transitioning the Task
 +    *   **Key:** `FRONTEND_URL`
 +    *   **Value:** `https://task-manager-app-seven-blond.vercel.app`
 +3.  **Result:** Once set, the backend will correctly "bounce" you back to your live Vercel dashboard to complete the synchronization.
-++
+
+## 12. GitHub OAuth "Stuck" on Authorization Page
+**The Issue:** After clicking "Authorize," the user remained on the GitHub page instead of being redirected. This happened because the `redirect_uri` sent by the backend was being dynamically generated from the `host` header, which can be unreliable (reporting `localhost` or internal IDs) on Render's proxy. GitHub requires an exact string match for security.
+**The Fix:**
+1.  **Backend Code Update:** Refactored `github_controller.js` to prioritize a hardcoded `BACKEND_URL` environment variable when constructing the redirect URI.
+2.  **Environment Variable:** Add the following to **Render**:
+    *   **Key:** `BACKEND_URL`
+    *   **Value:** `https://task-manager-api-8uzs.onrender.com`
+3.  **Result:** This forces the backend to always send the official, whitelisted return address to GitHub, regardless of its internal server name.
+
+## 13. GitHub Dashboard "Stuck" on Connect Button (UI State Sync)
+**The Issue:** Even after a successful OAuth flow and database update, the frontend continued to show the "Connect GitHub" button instead of the user's repos. Console logs confirmed the API was returning `success: true`, but the integration stats were missing the critical `connected: true` boolean.
+**The Fix:**
+1.  **Backend Model Update:** Modified `server/models/github_model.js` in the `getGitHubIntegrationStats` method to explicitly include `connected: true` when a valid integration is found.
+2.  **Result:** The frontend now correctly identifies the active connection state and automatically flips the UI to show the repository management dashboard.
