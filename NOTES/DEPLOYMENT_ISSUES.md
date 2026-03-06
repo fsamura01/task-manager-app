@@ -82,3 +82,26 @@ This document records the major hurdles encountered while transitioning the Task
 **The Fix:**
 1.  **Backend Model Update:** Modified `server/models/github_model.js` in the `getGitHubIntegrationStats` method to explicitly include `connected: true` when a valid integration is found.
 2.  **Result:** The frontend now correctly identifies the active connection state and automatically flips the UI to show the repository management dashboard.
+
+## 14. Proxy Architecture (Front Door vs Bridge)
+**Concept:** The proxy (Vercel/Vite) acts as both a security "Front Door" (hiding the server's real IP) and a "Bridge" (connecting separate frontend and backend environments). This allows the frontend to call `/api` locally or in the cloud without changing a single line of code.
+
+## 15. Prefix Matching & Route Passthrough
+**Concept:** Because our backend Express app is built using `app.use("/api", ...)`, the proxy is a simple "passthrough." It takes the incoming `/api/projects` and hands it directly to Render as `/api/projects`. If the backend DID NOT use `/api` internally, the proxy would need to rewrite the prefix (stripping it) before handing it over.
+
+## 16. Environment-Specific Triggers (Vite vs Vercel)
+**The Question:** What triggers the local proxy vs the cloud proxy?
+**The Answer:**
+*   **Local Trigger:** Running `npm run dev`. This starts the **Vite** development server on your laptop. It reads `vite.config.js` and intercepts any `/api` calls to send them to `localhost:5000`.
+*   **Cloud Trigger:** Visiting your live URL on **Vercel**. When you deploy, Vercel's global infrastructure reads `vercel.json`. Their "Edge Network" intercepts calling `/api` and proxies them to the live **Render** URL.
+*   **The Unified Code:** The frontend code itself remains "dumb"—it just sends a request to `/api` and relies on the environment's "Traffic Controller" (Vite or Vercel) to be there to catch it.
+
+## 17. The "Code Bridge": Where Proxying Happens in Logic
+**The Question:** Where exactly in the code does this `/api` request start?
+**The Implementation:**
+1.  **The Definition (`client/src/utils/api.js`):** We defined a centralized `BASE_URL = '/api'`. This ensures that every single network request in the entire app starts with that specific prefix.
+2.  **The Call (`client/src/context/AuthProvider.jsx`):** When a user actions something (like Login), the code calls `api.post("/auth/login")`. 
+3.  **The Browser's Role:** Because the URL starts with a `/`, the browser automatically attaches the "Current Domain" to it. On your laptop, it tries to hit `http://localhost:3000/api/auth/login`.
+4.  **The Interception (`vite.config.js`):** The Vite development server is "listening" at port 3000. It sees the `/api` prefix and, based on the `proxy` configuration, immediately reroutes that specific request to `http://localhost:5000` (the backend).
+
+**Key Takeaway:** The "Proxy" is a invisible hand that catches requests *after* your code sends them but *before* they fail, rerouting them to the correct server based on the environment.
