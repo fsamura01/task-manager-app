@@ -593,6 +593,57 @@ Our tests specifically isolated the utility and checked the precise rules it mus
 
 ---
 
+## 🚀 19. Production Deployment (Neon + Render + Vercel)
+
+The final stage of development is taking an application from `localhost` to the live internet. We deployed using a 100% free, modern three-tier hosting stack.
+
+### 🏗️ 1. The Architecture
+
+```text
+User Browser → Vercel (Frontend) → /api/* rewrite → Render (Backend) → Neon (PostgreSQL)
+```
+
+- **Neon** hosts the PostgreSQL database. It's "serverless," meaning the DB sleeps when unused and wakes on demand.
+- **Render** hosts the Node.js/Express backend. Free tier instances also sleep after 15 minutes of inactivity (~30-50s cold start).
+- **Vercel** hosts the React/Vite frontend. It deploys as a static site with near-instant response times worldwide.
+
+### 🔗 2. The Proxy Pattern (`vercel.json`)
+
+Our `api.js` uses a relative URL: `const BASE_URL = '/api'`. This is elegant because it works in **both** environments without code changes:
+
+- **Local Dev**: Vite's `server.proxy` in `vite.config.js` forwards `/api` → `localhost:5000`.
+- **Production**: A `vercel.json` rewrite rule forwards `/api` → `https://task-manager-api-8uzs.onrender.com`.
+
+This pattern is called a **Reverse Proxy** — the frontend server silently forwards requests to the backend without the browser ever knowing.
+
+### 🔐 3. Environment Variables as Feature Switches
+
+A key production pattern is using environment variables to toggle entire features on and off:
+
+| Variable | Effect |
+|:---|:---|
+| `STORAGE_STRATEGY=local` | Files saved to local disk |
+| `STORAGE_STRATEGY=s3` | Files upload directly to AWS S3 |
+| `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` | Enables GitHub integration |
+| *(Not set)* | GitHub integration gracefully disabled |
+
+This means you can enable features just by adding variables in the Render dashboard — **no code redeployment required**.
+
+### 🐛 4. Lessons Learned: Crash-on-Boot Errors
+
+Two startup crashes occurred because optional third-party integrations threw fatal errors when their credentials were missing:
+1. **`multer-s3`**: Threw `Error: bucket is required` because `S3_BUCKET_NAME` was undefined. Fix: provide a fallback string and default to local storage.
+2. **`GitHubOAuthService`**: Threw `Error: GitHub OAuth credentials not configured`. Fix: replace `throw` with `console.warn()`.
+
+**Takeaway**: Optional integrations should **never** crash the entire server on boot. Always use graceful fallbacks or warnings for missing credentials.
+
+### 📡 5. `npm start` vs `npm run dev` in Production
+
+- `npm run dev` → runs `nodemon` (watches files, auto-restarts on change). Great for local coding, wasteful and unstable in production.
+- `npm start` → runs `node app.js`. Boots once, runs lean and efficient. **Always use this in production.**
+
+---
+
 ## 🏁 Summary for Students
 
-Building a professional app isn't just about making features work; it's about **Separation of Concerns** and **Predictable Failure**. Keep your functions small, your files focused, handle your errors centrally, prove your logic with automated tests, and always respect the rules of the framework versions you are using.
+Building a professional app isn't just about making features work; it's about **Separation of Concerns** and **Predictable Failure**. Keep your functions small, your files focused, handle your errors centrally, prove your logic with automated tests, deploy with confidence using environment-driven configuration, and always respect the rules of the framework versions you are using.

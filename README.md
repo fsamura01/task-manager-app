@@ -9,6 +9,8 @@ tech_stack: [React, Node.js, Express, PostgreSQL, WebSockets]
 
 A full-stack project-based task management application built with a modern tech stack (React, Node.js, Express, PostgreSQL). This app allows users to organize tasks within projects, manage authentication, and handle file uploads.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/fsamura01/task-manager-app)
+
 ### 🏗️ High-Level Architecture
 
 The application follows a standard client-server architecture:
